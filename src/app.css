@@ -145,6 +145,11 @@ svg { flex: none; }
   clip-path: circle(0% at var(--ox, 50%) var(--oy, 100%));
 }
 .habit.done .fill { clip-path: circle(150% at var(--ox, 50%) var(--oy, 100%)); }
+.habit:not(.done) .fill { transition: clip-path .28s var(--out); }
+.habit.holding .fill { clip-path: circle(150% at var(--ox, 50%) var(--oy, 100%)); transition: clip-path .65s cubic-bezier(.5, 0, .75, .4); }
+.habit.holding .blob { transform: scale(.975); }
+.blob { transition: color .45s .15s, border-color .45s, transform .3s var(--spring); }
+.habit.just-held .badge { animation: pop .65s var(--spring) .05s both; }
 .habit.just-done .fill { animation: wipe .8s var(--ease) both; }
 .habit.just-undone .fill { animation: unwipe .5s var(--ease) both; }
 .habit.done .blob { color: var(--ink); border-color: transparent; }
@@ -550,6 +555,23 @@ svg { flex: none; }
 .wheel li.sel { color: var(--text); font-weight: 600; }
 .wheels.big li { font-size: 26px; }
 .colon { font: 600 28px var(--sans); color: var(--muted); }
+
+/* clock-face time picker */
+.tpick { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 4px 0 18px; }
+.tcell {
+  width: 104px; height: 80px; border-radius: 18px; border: 0; background: var(--surface-3); color: var(--muted);
+  font: 500 52px/1 var(--sans); font-variant-numeric: tabular-nums; transition: background .25s, color .25s;
+}
+.tcell.on { background: var(--ivory); color: var(--ink); }
+.tpick .colon { font-size: 44px; }
+.dial { display: block; width: min(100%, 280px); height: auto; margin: 0 auto; touch-action: none; cursor: pointer; outline-offset: 6px; border-radius: 50%; }
+.dial .face { fill: var(--surface-2); }
+.dial .hand { stroke: var(--ivory); stroke-width: 2; }
+.dial .hub, .dial .knob { fill: var(--ivory); }
+.dial .kdot { fill: var(--ink); }
+.dial text { fill: var(--text); font: 500 17px var(--sans); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.dial text.in { fill: var(--muted); font-size: 14px; }
+.dial text.on { fill: var(--ink); font-weight: 700; }
 
 /* keypad */
 .kp-display { text-align: center; padding: 8px 0 18px; }

@@ -450,15 +450,15 @@ function originOf(btn, h) {
   const b = btn.getBoundingClientRect(), r = blob.getBoundingClientRect();
   return { x: Math.round(((b.left + b.width / 2 - r.left) / r.width) * 100), y: Math.round(((b.top + b.height / 2 - r.top) / r.height) * 100) };
 }
-function logTo(h, nv, btn) {
+function logTo(h, nv, btn, held = null) {
   const day = UI.day;
   if (day < h.start) { toast("Can't log before this habit's start date"); return; }
   const was = isDone(h, day), r0 = reps(h);
-  const o = originOf(btn, h);
-  const rect = btn ? btn.getBoundingClientRect() : null;
+  const o = held ? held.o : originOf(btn, h);
+  const rect = held ? held.rect : btn ? btn.getBoundingClientRect() : null;
   setVal(h, day, Math.max(0, nv));
   const now = isDone(h, day);
-  const fx = now && !was ? 'just-done norise' : !now && was ? 'just-undone norise' : 'norise';
+  const fx = now && !was ? (held ? 'just-held norise' : 'just-done norise') : !now && was ? 'just-undone norise' : 'norise';
   const el = $(`.habit[data-hid="${h.id}"]`);
   if (el) {
     const tmp = document.createElement('div');
@@ -471,9 +471,35 @@ function logTo(h, nv, btn) {
     haptic([12, 50, 20]);
     if (rect) burst(rect, h.color);
     const r1 = reps(h), m = MILESTONES.find(x => x > r0 && x <= r1);
-    if (m) setTimeout(() => celebrate(h, m), 950);
+    if (m || held) setTimeout(() => celebrate(h, m || null), held ? 420 : 950);
   } else haptic(8);
 }
+
+/* ---------- press and hold a card to complete it ---------- */
+let HOLD = null;
+const HOLD_MS = 650;
+function holdStart(e) {
+  if ((e.button && e.button !== 0) || layers.length || HOLD) return;
+  const blob = e.target.closest('.habit[data-hid] .blob');
+  if (!blob || e.target.closest('button')) return;
+  const card = blob.closest('.habit'), h = H(card.dataset.hid);
+  if (!h || UI.day < h.start) return;
+  const r = blob.getBoundingClientRect();
+  const o = { x: Math.round(((e.clientX - r.left) / r.width) * 100), y: Math.round(((e.clientY - r.top) / r.height) * 100) };
+  HOLD = { h, card, x0: e.clientX, y0: e.clientY, o, rect: { left: e.clientX - 12, top: e.clientY - 12, width: 24, height: 24 }, t: 0 };
+  if (isDone(h, UI.day)) {
+    // Already done: holding opens the completion page again.
+    HOLD.t = setTimeout(() => { const x = HOLD; holdEnd(); haptic(10); celebrate(x.h, null); }, 420);
+    return;
+  }
+  card.style.setProperty('--ox', o.x + '%'); card.style.setProperty('--oy', o.y + '%');
+  card.classList.add('holding'); haptic(5);
+  HOLD.t = setTimeout(() => {
+    const x = HOLD; HOLD = null; x.card.classList.remove('holding');
+    logTo(x.h, Math.max(val(x.h, UI.day), x.h.goal), null, x);
+  }, HOLD_MS);
+}
+function holdEnd() { if (!HOLD) return; clearTimeout(HOLD.t); HOLD.card.classList.remove('holding'); HOLD = null; }
 function burst(rect, color, n = 16, gold = false) {
   if (reduce) return;
   const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
@@ -526,23 +552,26 @@ function medalSVG(n) {
     <text x="110" y="${n >= 100 ? 124 : 130}" text-anchor="middle" font-family="Newsreader, Georgia, serif" font-style="italic" font-size="${n >= 1000 ? 40 : n >= 100 ? 50 : 64}" fill="#3a2205">${n}</text>
   </svg>`;
 }
+// m = milestone just reached, or null for a plain "habit completed" page.
 function celebrate(h, m) {
   const t = today();
   const week = Array.from({ length: 7 }, (_, k) => addDays(t, k - 6));
+  const r = reps(h), next = MILESTONES.find(x => x > r);
   const el = document.createElement('div');
   el.className = 'layer';
-  el.innerHTML = `<div class="celebrate" role="dialog" aria-modal="true" aria-label="Milestone reached">
+  el.innerHTML = `<div class="celebrate" role="dialog" aria-modal="true" aria-label="${m ? 'Milestone reached' : 'Habit completed'}">
     <p class="c-top">Habit completed</p>
-    ${medalSVG(m)}
-    <h2 class="c-title">${MTITLE[m] || `${m} repetitions!`}</h2>
-    <p class="c-sub">You earned the <b>${m} rep milestone</b> for ${esc(h.name)}.</p>
+    ${medalSVG(m || r)}
+    <h2 class="c-title">${m ? (MTITLE[m] || `${m} repetitions!`) : 'Another vote cast.'}</h2>
+    <p class="c-sub">${m ? `You earned the <b>${m} rep milestone</b> for ${esc(h.name)}.`
+      : `${esc(h.name)}: <b>${r} rep${r === 1 ? '' : 's'}</b> so far.${next ? ` ${next - r} more to the ${next} rep milestone.` : ''}`}</p>
     <div class="week">${week.map(d => `<div class="wd ${isDone(h, d) ? 'on' : ''} ${d === t ? 'now' : ''}"><i>${isDone(h, d) ? I.check : ''}</i><span>${DOW[parse(d).getDay()]}</span></div>`).join('')}</div>
     <div class="c-actions"><button class="btn" data-a="details">View habit details</button><button class="btn ghost" data-close>Back to home</button></div>
   </div>`;
   const L = pushLayer(el);
   wire(L, { details: (a, e, L2) => after(L2, () => detailsSheet(h.id)) });
-  haptic([30, 60, 30, 60, 80]);
-  setTimeout(() => { const md = el.querySelector('.medal'); if (md) burst(md.getBoundingClientRect(), 'honey', 34, true); }, 650);
+  haptic(m ? [30, 60, 30, 60, 80] : [20, 40, 30]);
+  setTimeout(() => { const md = el.querySelector('.medal'); if (md) burst(md.getBoundingClientRect(), 'honey', m ? 34 : 18, true); }, 650);
 }
 
 /* ---------- habit actions ---------- */
@@ -897,18 +926,72 @@ function wheelSheet(title, items, sel, cb) {
     acts: { ok: (a, e, L) => { cb(get()); closeLayer(L); } },
   });
 }
+// Clock-face time picker: outer ring 0–11, inner ring 12–23, then every minute 0–59.
 function timeSheet(cur, cb) {
   const now = new Date();
-  const [hh, mm] = cur ? cur.split(':').map(Number) : [now.getHours(), Math.round(now.getMinutes() / 5) * 5 % 60];
-  const HRS = Array.from({ length: 24 }, (_, i) => pad(i)), MINS = Array.from({ length: 12 }, (_, i) => pad(i * 5));
-  let gh, gm;
+  let [hh, mm] = cur ? cur.split(':').map(Number) : [now.getHours(), now.getMinutes()];
+  let mode = 'h', root, svg;
+  const C = 140, RO = 112, RI = 74, TAU = Math.PI * 2;
+  const pos = (i, n, r) => { const a = (i / n) * TAU; return [C + r * Math.sin(a), C - r * Math.cos(a)]; };
+  const num = (x, y, t, cls) => `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" class="${cls}">${t}</text>`;
+  function face() {
+    let marks = '', sx, sy, kr = 20;
+    if (mode === 'h') {
+      for (let i = 0; i < 24; i++) { const [x, y] = pos(i % 12, 12, i < 12 ? RO : RI); marks += num(x, y, i, `${i >= 12 ? 'in' : ''} ${i === hh ? 'on' : ''}`); }
+      [sx, sy] = pos(hh % 12, 12, hh < 12 ? RO : RI); if (hh >= 12) kr = 17;
+    } else {
+      for (let i = 0; i < 60; i += 5) { const [x, y] = pos(i, 60, RO); marks += num(x, y, pad(i), i === mm ? 'on' : ''); }
+      [sx, sy] = pos(mm, 60, RO);
+    }
+    return `<circle class="face" cx="${C}" cy="${C}" r="136"/>
+      <line class="hand" x1="${C}" y1="${C}" x2="${sx.toFixed(1)}" y2="${sy.toFixed(1)}"/><circle class="hub" cx="${C}" cy="${C}" r="4"/>
+      <circle class="knob" cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="${kr}"/>
+      ${mode === 'm' && mm % 5 ? `<circle class="kdot" cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="3"/>` : ''}${marks}`;
+  }
+  function paint() {
+    svg.innerHTML = face();
+    svg.setAttribute('aria-label', mode === 'h' ? `Hour ${hh}` : `Minute ${mm}`);
+    const ch = root.querySelector('#tch'), cm = root.querySelector('#tcm');
+    ch.textContent = pad(hh); cm.textContent = pad(mm);
+    ch.classList.toggle('on', mode === 'h'); cm.classList.toggle('on', mode === 'm');
+    ch.setAttribute('aria-pressed', mode === 'h'); cm.setAttribute('aria-pressed', mode === 'm');
+  }
+  function pick(e) {
+    const r = svg.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width) * 280 - C, y = ((e.clientY - r.top) / r.height) * 280 - C;
+    let a = Math.atan2(x, -y); if (a < 0) a += TAU;
+    if (mode === 'h') {
+      const h = (Math.round((a / TAU) * 12) % 12) + (Math.hypot(x, y) < (RO + RI) / 2 ? 12 : 0);
+      if (h !== hh) { hh = h; haptic(3); paint(); }
+    } else {
+      const m = Math.round((a / TAU) * 60) % 60;
+      if (m !== mm) { mm = m; if (m % 5 === 0) haptic(3); paint(); }
+    }
+  }
   sheet({
     title: 'Habit time',
-    body: `<div class="wheels big">${wheelHTML('wh', HRS)}<span class="colon">:</span>${wheelHTML('wm', MINS)}</div>`,
+    body: `<div class="tpick"><button class="tcell on" id="tch" data-a="mh" aria-label="Pick the hour">${pad(hh)}</button><span class="colon">:</span><button class="tcell" id="tcm" data-a="mm" aria-label="Pick the minute">${pad(mm)}</button></div>
+      <svg class="dial" id="dial" viewBox="0 0 280 280" role="slider" tabindex="0" aria-label="Hour"></svg>
+      <p class="small-note" style="text-align:center">Drag around the clock. Inner ring is afternoon and evening.</p>`,
     foot: `<button class="btn" data-a="ok">Confirm</button>${cur ? '<button class="btn danger-ghost" data-a="rm">Remove this time</button>' : '<button class="btn ghost" data-close>Cancel</button>'}`,
-    mount: L => { gh = wheelMount(L.el.querySelector('#wh'), hh); gm = wheelMount(L.el.querySelector('#wm'), Math.floor(mm / 5)); },
+    mount: L => {
+      root = L.el; svg = root.querySelector('#dial'); paint();
+      let down = false;
+      svg.addEventListener('pointerdown', e => { down = true; e.stopPropagation(); try { svg.setPointerCapture(e.pointerId); } catch { } pick(e); });
+      svg.addEventListener('pointermove', e => { if (down) pick(e); });
+      const up = () => { if (!down) return; down = false; if (mode === 'h') setTimeout(() => { mode = 'm'; paint(); }, 220); };
+      svg.addEventListener('pointerup', up); svg.addEventListener('pointercancel', up);
+      svg.addEventListener('keydown', e => {
+        const d = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1 }[e.key]; if (!d) return;
+        e.preventDefault();
+        if (mode === 'h') hh = (hh + d + 24) % 24; else mm = (mm + d + 60) % 60;
+        paint();
+      });
+    },
     acts: {
-      ok: (a, e, L) => { cb(`${HRS[gh()]}:${MINS[gm()]}`); closeLayer(L); },
+      mh: () => { mode = 'h'; paint(); haptic(3); },
+      mm: () => { mode = 'm'; paint(); haptic(3); },
+      ok: (a, e, L) => { cb(`${pad(hh)}:${pad(mm)}`); closeLayer(L); },
       rm: (a, e, L) => { cb(null); closeLayer(L); },
     },
   });
@@ -1227,7 +1310,7 @@ function helpSheet() {
   sheet({
     title: 'How it works',
     body: `<div class="acts" style="gap:4px">
-      <div class="row"><span class="mico" style="background:var(--ivory);color:var(--ink)">${I.plus}</span><div class="grow">Tap <b>+</b> under a habit to log it. Hit the goal and the card lights up.</div></div>
+      <div class="row"><span class="mico" style="background:var(--ivory);color:var(--ink)">${I.plus}</span><div class="grow">Tap <b>+</b> under a habit to log it, or press and hold the card to finish it in one go. Hit the goal and the card lights up.</div></div>
       <div class="row"><span class="mico" style="background:linear-gradient(155deg,#ffb45e,#ff5a1f)">${I.bolt}</span><div class="grow">The bolt number is your streak. Days a habit isn't scheduled, or is snoozed, never break it.</div></div>
       <div class="row"><span class="mico" style="background:var(--surface-3)">${I.dots}</span><div class="grow">Tap <b>•••</b> for details, history, snooze, Hall of Fame, edit or delete.</div></div>
       <div class="row"><span class="mico" style="background:var(--surface-3)">${I.clock}</span><div class="grow">Tap a past day at the top to fill in what you forgot to log.</div></div></div>`,
@@ -1286,6 +1369,13 @@ document.addEventListener('click', e => {
   if (a && ACT[a.dataset.act]) ACT[a.dataset.act](a, e);
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && layers.length) closeTop(); });
+{
+  const v = $('#view');
+  v.addEventListener('pointerdown', holdStart);
+  ['pointerup', 'pointercancel', 'scroll'].forEach(ev => v.addEventListener(ev, holdEnd, { passive: true }));
+  v.addEventListener('pointermove', e => { if (HOLD && Math.hypot(e.clientX - HOLD.x0, e.clientY - HOLD.y0) > 12) holdEnd(); }, { passive: true });
+  v.addEventListener('contextmenu', e => { if (e.target.closest('.habit .blob')) e.preventDefault(); });
+}
 if (window.visualViewport) {
   const vv = () => document.documentElement.style.setProperty('--vvh', window.visualViewport.height + 'px');
   window.visualViewport.addEventListener('resize', vv); vv();

@@ -73,6 +73,96 @@ function save() {
   try { localStorage.setItem(KEY, JSON.stringify(D)); } catch { }
   // Ask the browser not to clear our data when the phone runs low on space.
   if (!persistAsked && D.habits.length) { persistAsked = true; try { navigator.storage && navigator.storage.persist && navigator.storage.persist().catch(() => { }); } catch { } }
+  schedSync();
+}
+
+/* ---------- reminders (web push) ---------- */
+// The server only gets what it needs to ring: habit names, times, days, snoozes and what's done today.
+const PUSH_API = 'https://dswi-reminders.dswi-reminders.workers.dev';
+const VAPID_PUBLIC = 'BMAJ-PRh54PvfXIWVaErHc6nsz2wFk5W3tlwmlbjJ-ePGiSgG-fYhsVFi7WEvtBjuZblZOihmPUMsqUneMVOjQY';
+const BEFORE = [0, 5, 10, 15, 30];
+const PK = { on: 'dswi.push', last: 'dswi.push.last', dev: 'dswi.dev' };
+const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { } };
+const pushSupported = () => STANDALONE && location.protocol === 'https:' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const pushOn = () => pushSupported() && lsGet(PK.on) === '1' && Notification.permission === 'granted';
+function devId() {
+  let id = lsGet(PK.dev);
+  if (!id || !/^[a-z0-9]{8,40}$/.test(id)) { id = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => (b % 36).toString(36)).join(''); lsSet(PK.dev, id); }
+  return id;
+}
+const keyBytes = s => { const b = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(b, c => c.charCodeAt(0)); };
+async function pushSub(create) {
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub && create) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(VAPID_PUBLIC) });
+  return sub;
+}
+const remindable = () => live().filter(h => h.reminder && h.times.length && h.days.length);
+async function api(path, body) {
+  const r = await fetch(PUSH_API + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+  return j;
+}
+let syncT = null, syncing = null;
+function schedSync() { if (!pushOn()) return; clearTimeout(syncT); syncT = setTimeout(() => syncPush().catch(() => { }), 1500); }
+async function syncPush(force = false) {
+  if (!pushOn()) return null;
+  if (syncing) await syncing.catch(() => { });
+  syncing = (async () => {
+    const sub = await pushSub(true);
+    const t = today();
+    const body = {
+      id: devId(), sub: sub.toJSON(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      items: remindable().map(h => ({ id: h.id, name: h.name, identity: h.identity, days: h.days, times: h.times, before: h.before || 0, start: h.start, snooze: h.snooze, snoozeFrom: h.snoozeFrom })),
+      done: { date: t, ids: live().filter(h => isDone(h, t)).map(h => h.id) },
+    };
+    const s = JSON.stringify(body);
+    if (!force && lsGet(PK.last) === s) return null;
+    const res = await api('/sync', body);
+    lsSet(PK.last, s);
+    return res;
+  })();
+  try { return await syncing; } finally { syncing = null; }
+}
+// Must be called straight from a tap: Android only shows the permission prompt after a user gesture.
+async function enablePush({ quiet = false } = {}) {
+  if (!pushSupported()) { toast('Open the installed app to turn on reminders'); return false; }
+  if (Notification.permission === 'denied') { toast('Notifications are blocked. Allow them in Android settings for this app.'); return false; }
+  const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+  if (perm !== 'granted') { toast('No notifications, no reminders. Your call.'); return false; }
+  lsSet(PK.on, '1');
+  try {
+    await syncPush(true);
+    if (!quiet) toast('Reminders are on for this phone');
+    return true;
+  } catch (err) {
+    lsSet(PK.on, null);
+    toast("Couldn't reach the reminder server. Check your internet and try again.");
+    return false;
+  }
+}
+async function disablePush() {
+  lsSet(PK.on, null); lsSet(PK.last, null);
+  try { const sub = await pushSub(false); if (sub) await sub.unsubscribe(); } catch { }
+  try { await api('/remove', { id: devId() }); } catch { }
+  toast('Reminders are off');
+}
+async function testPush() {
+  try {
+    await syncPush(true);
+    const r = await api('/test', { id: devId() });
+    toast(r.ok ? 'Sent. It should pop up in a few seconds.' : 'The push service said no (' + r.status + '). Try turning reminders off and on.');
+  } catch { toast("Couldn't reach the reminder server"); }
+}
+function reminderNote(d) {
+  if (!d.reminder) return 'No reminder for this habit.';
+  if (!d.times.length) return 'Add a habit time above so the reminder knows when to ring.';
+  if (!pushSupported()) return 'Reminders work in the installed app.';
+  if (Notification.permission === 'denied') return 'Notifications are blocked for this app in Android settings.';
+  if (!pushOn()) return 'Reminders are off on this phone. Saving will ask to turn them on.';
+  return 'A notification will ring on this phone.';
 }
 let D = load();
 const UI = { tab: 'home', day: today(), seg: 'progress' };
@@ -656,8 +746,8 @@ function openFlow(mode, editId) {
   const h = editId ? H(editId) : null;
   const replace = mode === 'replace' || !!(h && h.bad);
   const d = h
-    ? { bad: h.bad || null, _replace: replace, habit: h.habit, when: h.when, identity: h.identity, days: [...h.days], goal: h.goal, unit: h.unit, times: [...h.times], reminder: h.reminder, color: h.color }
-    : { bad: replace ? '' : null, _replace: replace, habit: '', when: '', identity: '', days: [0, 1, 2, 3, 4, 5, 6], goal: 1, unit: 'times', times: [], reminder: true, color: COLORS[D.habits.length % COLORS.length] };
+    ? { bad: h.bad || null, _replace: replace, habit: h.habit, when: h.when, identity: h.identity, days: [...h.days], goal: h.goal, unit: h.unit, times: [...h.times], reminder: h.reminder, before: h.before || 0, color: h.color }
+    : { bad: replace ? '' : null, _replace: replace, habit: '', when: '', identity: '', days: [0, 1, 2, 3, 4, 5, 6], goal: 1, unit: 'times', times: [], reminder: true, before: 0, color: COLORS[D.habits.length % COLORS.length] };
   const fields = replace ? ['bad', 'habit', 'when', 'identity'] : ['habit', 'when', 'identity'];
   const steps = ['intro', ...fields, 'review', 'settings'];
   const F = { d, h, steps, fields, i: h ? steps.length - 1 : 0, ret: false, pi: {}, replace };
@@ -729,7 +819,8 @@ function openFlow(mode, editId) {
         <div class="set-sec"><div class="set-row">Color</div>
           <div class="colors">${COLORS.map(c => `<button class="cdot c-${c} ${d.color === c ? 'on' : ''}" data-a="color" data-v="${c}" aria-label="${c}" aria-pressed="${d.color === c}"></button>`).join('')}</div></div>
         <div class="set-sec"><div class="row-sb"><b style="font-weight:600;font-size:14px">Send reminder</b><button class="switch ${d.reminder ? 'on' : ''}" data-a="rem" role="switch" aria-checked="${d.reminder}" aria-label="Send reminder"></button></div>
-          <p class="small-note">Reminders arrive in a later version. Your choice is saved now.</p></div>
+          <div class="times" id="befs" style="margin-top:12px" ${d.reminder ? '' : 'hidden'}>${BEFORE.map(m => `<button class="tchip ${(d.before || 0) === m ? 'on' : ''}" data-a="before" data-v="${m}" aria-pressed="${(d.before || 0) === m}">${m ? m + ' min before' : 'At habit time'}</button>`).join('')}</div>
+          <p class="small-note" id="remnote">${reminderNote(d)}</p></div>
       </div>
       <div class="fl-foot"><button class="btn" data-a="save" id="fsave" ${d.days.length ? '' : 'disabled'}>${edit ? 'Save changes' : 'Create habit'}</button></div>`;
     const g = root.querySelector('#goal');
@@ -751,9 +842,11 @@ function openFlow(mode, editId) {
   function saveHabit() {
     const d = F.d;
     if (!d.days.length) return;
-    const data = { name: cap(d.habit), habit: d.habit, when: d.when, identity: d.identity, bad: d._replace ? d.bad : null, days: [...d.days].sort(), goal: d.goal || 1, unit: d.unit, times: [...d.times].sort(), reminder: d.reminder, color: d.color };
+    const data = { name: cap(d.habit), habit: d.habit, when: d.when, identity: d.identity, bad: d._replace ? d.bad : null, days: [...d.days].sort(), goal: d.goal || 1, unit: d.unit, times: [...d.times].sort(), reminder: d.reminder, before: d.before || 0, color: d.color };
     if (F.h) { Object.assign(F.h, data); toast('Habit updated'); }
     else { D.habits.push({ id: uid(), ...data, start: today(), created: Date.now(), snooze: null, snoozeFrom: null, fame: false }); toast('Habit created. Now do it, idiot.'); }
+    // Still inside the Save tap, so Android allows the notification prompt.
+    if (d.reminder && d.times.length && pushSupported() && !pushOn() && Notification.permission !== 'denied') enablePush();
     save(); closeLayer(L); UI.day = today(); if (UI.tab !== 'home') UI.tab = 'home'; render();
   }
 
@@ -768,7 +861,14 @@ function openFlow(mode, editId) {
     unit: () => wheelSheet('Select units', UNITS, Math.max(0, UNITS.indexOf(F.d.unit)), i => { F.d.unit = UNITS[i]; root.querySelector('#unitl').textContent = F.d.unit; }),
     time: a => { const n = +a.dataset.v; timeSheet(n >= 0 ? F.d.times[n] : null, t => { if (t === null) F.d.times.splice(n, 1); else if (n >= 0) F.d.times[n] = t; else if (!F.d.times.includes(t)) F.d.times.push(t); F.d.times.sort(); const y = root.querySelector('.fl-body').scrollTop; drawSettings('none'); root.querySelector('.fl-body').scrollTop = y; }); },
     color: a => { F.d.color = a.dataset.v; root.querySelectorAll('.cdot').forEach(c => { c.classList.toggle('on', c === a); c.setAttribute('aria-pressed', c === a); }); haptic(4); },
-    rem: a => { F.d.reminder = !F.d.reminder; a.classList.toggle('on', F.d.reminder); a.setAttribute('aria-checked', F.d.reminder); haptic(4); },
+    rem: a => {
+      F.d.reminder = !F.d.reminder; a.classList.toggle('on', F.d.reminder); a.setAttribute('aria-checked', F.d.reminder); haptic(4);
+      root.querySelector('#befs').hidden = !F.d.reminder; root.querySelector('#remnote').textContent = reminderNote(F.d);
+    },
+    before: a => {
+      F.d.before = Number(a.dataset.v); haptic(3);
+      root.querySelectorAll('#befs .tchip').forEach(b => { const on = Number(b.dataset.v) === F.d.before; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+    },
     save: () => saveHabit(),
   });
   root.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('.slot[data-a]')) e.target.click(); });
@@ -973,8 +1073,8 @@ function focusHTML() {
 function paintFocus() {
   const t = $('#ftime');
   if (t) {
-    t.textContent = mmss(FS.left);
-    $('#fstate').textContent = focusState();
+    const tm = mmss(FS.left); if (t.textContent !== tm) t.textContent = tm;
+    const st = $('#fstate'), sv = focusState(); if (st.textContent !== sv) st.textContent = sv;
     const b = $('#fblob'); b.style.setProperty('--p', 1 - FS.left / FS.total); b.classList.toggle('run', FS.running);
     const c = $('#fctl'); const html = focusCtl(); if (c.dataset.h !== html) { c.innerHTML = html; c.dataset.h = html; }
   }
@@ -1052,8 +1152,10 @@ function profileSheet() {
     title: 'You', tall: true,
     body: `<input class="field" id="pname" placeholder="Your name" value="${esc(D.name)}" aria-label="Your name" style="font:300 24px var(--serif)">
       <div class="stats" style="margin-top:12px"><div class="stat"><b>${live().length}</b><small>Active habits</small></div><div class="stat"><b>${total}</b><small>Votes cast</small></div><div class="stat"><b>${all.filter(h => h.fame).length}</b><small>Hall of Fame</small></div></div>
+      <p class="sec-label">Reminders</p>
+      <div id="remsec">${remindersHTML()}</div>
       <p class="sec-label">Backup</p>
-      <p class="muted" style="margin:0 0 12px">Everything lives on this phone and nowhere else. Copy a backup now and then and keep it somewhere safe, like a note to yourself.</p>
+      <p class="muted" style="margin:0 0 12px">Your habits and history live on this phone. With reminders on, the reminder server keeps only names, times and what's done today. Copy a backup now and then and keep it somewhere safe.</p>
       <div class="stackbtns">
       ${STANDALONE ? `<button class="btn ghost" data-a="download">${ic('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', 20, 2)}Save backup file</button>
       <label class="btn ghost" for="rfile">Restore from backup file</label>
@@ -1064,7 +1166,7 @@ function profileSheet() {
       <p class="sec-label">Try it out</p>
       <div class="stackbtns"><button class="btn ghost" data-a="sample">Load sample habits</button>
       <button class="btn danger-ghost" data-a="erase">Erase everything</button></div>
-      <p class="small-note" style="text-align:center;margin-top:20px">Do Some Work Idiot · version 1.0</p>`,
+      <p class="small-note" style="text-align:center;margin-top:20px">Do Some Work Idiot · version 1.1</p>`,
     onClose: () => render({ still: true }),
     mount: L => {
       L.el.querySelector('#pname').addEventListener('input', e => { D.name = e.target.value.slice(0, 40); save(); });
@@ -1077,6 +1179,9 @@ function profileSheet() {
       });
     },
     acts: {
+      pushOn: async (a, e, L) => { a.disabled = true; await enablePush(); const s = L.el.querySelector('#remsec'); if (s) s.innerHTML = remindersHTML(); },
+      pushOff: async (a, e, L) => { a.disabled = true; await disablePush(); const s = L.el.querySelector('#remsec'); if (s) s.innerHTML = remindersHTML(); },
+      pushTest: async a => { a.disabled = true; await testPush(); a.disabled = false; },
       download: () => {
         try {
           const blob = new Blob([JSON.stringify(D, null, 1)], { type: 'application/json' });
@@ -1100,6 +1205,15 @@ function profileSheet() {
       },
     },
   });
+}
+function remindersHTML() {
+  if (!pushSupported()) return `<p class="muted" style="margin:0">Reminders work in the installed app. Open Do Work from your home screen to turn them on.</p>`;
+  if (Notification.permission === 'denied') return `<p class="muted" style="margin:0">Notifications are blocked for this app. Allow them in Android Settings, Apps, Do Work, Notifications, then come back here.</p>`;
+  const n = remindable().reduce((k, h) => k + h.times.length, 0);
+  if (!pushOn()) return `<p class="muted" style="margin:0 0 12px">Get a nudge on this phone at each habit's time. Habits without a time never ring.</p>
+    <div class="stackbtns"><button class="btn" data-a="pushOn">${I.clock}Turn on reminders</button></div>`;
+  return `<p class="muted" style="margin:0 0 12px"><b style="color:var(--text)">On for this phone.</b> ${n ? `${n} reminder${n === 1 ? '' : 's'} set across your habits.` : 'No habit has a time yet, so nothing will ring.'} A habit already done that day stays quiet.</p>
+    <div class="stackbtns"><button class="btn ghost" data-a="pushTest">Send a test reminder</button><button class="btn ghost" data-a="pushOff">Turn off reminders</button></div>`;
 }
 function restoreFrom(text) {
   try {
@@ -1145,7 +1259,7 @@ function loadSample() {
 /* ---------- global events ---------- */
 const ACT = {
   tab: a => go(a.dataset.v),
-  day: a => { UI.day = a.dataset.v; haptic(4); const y = $('#view').scrollTop; render(); $('#view').scrollTop = Math.min(y, 0); },
+  day: a => { if (UI.day === a.dataset.v) return; UI.day = a.dataset.v; haptic(4); render({ still: true }); $('#view').scrollTop = 0; },
   plus: () => plusMenu(),
   newHabit: () => openFlow('new'),
   inc: a => { const h = H(a.dataset.id); logTo(h, val(h, UI.day) + 1, a); },
@@ -1176,7 +1290,8 @@ if (window.visualViewport) {
   const vv = () => document.documentElement.style.setProperty('--vvh', window.visualViewport.height + 'px');
   window.visualViewport.addEventListener('resize', vv); vv();
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden && FS.running) fTick(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) return; if (FS.running) fTick(); schedSync(); });
+schedSync(); // keeps the server current after an update or a new day
 setInterval(() => { if (UI.day > today() || (!layers.length && UI.tab === 'home' && $('.day.on') && $('.day.on span').textContent === 'Today' && UI.day !== today())) { UI.day = today(); render({ still: true }); } }, 60000);
 
 /* ---------- install / offline ---------- */

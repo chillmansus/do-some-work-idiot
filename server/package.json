@@ -1,0 +1,13 @@
+{
+  "name": "dswi-reminders",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "http_ece": "^1.2.0",
+    "wrangler": "^4.0.0"
+  }
+}

@@ -31,6 +31,7 @@ self.addEventListener('fetch', e => {
   }
 
   // Google Fonts: serve from cache, refresh in the background.
+  // (Requests to the reminder server are POSTs, so they never reach this handler.)
   if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
     e.respondWith(caches.open(FONTS).then(async c => {
       const hit = await c.match(req);
@@ -41,4 +42,30 @@ self.addEventListener('fetch', e => {
       return hit || net;
     }));
   }
+});
+
+/* Reminders: the server sends an encrypted push, we show it. */
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || 'Do some work, idiot', {
+    body: d.body || '',
+    tag: d.tag || 'dswi',
+    renotify: true,
+    icon: './icons/icon-192.png',
+    badge: './icons/badge-96.png',
+    vibrate: [70, 50, 70],
+    data: { hid: d.hid || null },
+  }));
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil((async () => {
+    const scope = self.registration.scope;
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const w = wins.find(c => c.url.startsWith(scope));
+    if (w) return w.focus();
+    return self.clients.openWindow(scope);
+  })());
 });

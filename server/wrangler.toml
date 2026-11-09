@@ -4,6 +4,9 @@ compatibility_date = "2025-09-01"
 workers_dev = true
 
 # Check for due reminders at the start of every minute.
+[observability]
+enabled = true
+
 [triggers]
 crons = ["* * * * *"]
 

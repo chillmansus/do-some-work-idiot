@@ -126,11 +126,12 @@ export default {
       let due; try { due = dueNow(dev, event.scheduledTime); } catch { continue; }
       for (const { it, t } of due) {
         jobs.push(sendPush(dev.sub, message(it, t), env, { topic: `h${it.id}`.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) })
-          .then(s => { if (s === 404 || s === 410) { delete all[id]; changed = true; } else if (s >= 400) console.log('push failed', s, it.id); })
+          .then(s => { console.log('push', it.id, t, 'status', s); if (s === 404 || s === 410) { delete all[id]; changed = true; } })
           .catch(e => console.log('push error', String(e))));
       }
     }
     await Promise.all(jobs);
+    if (jobs.length) console.log(`cron ${new Date(event.scheduledTime).toISOString()}: ${jobs.length} reminder(s) sent`);
     if (changed) await env.KV.put(KEY, JSON.stringify(all));
   },
 };

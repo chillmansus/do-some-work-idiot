@@ -39,10 +39,11 @@ export function dueNow(dev, ms) {
   return out;
 }
 
+export const TITLE = 'Your future self is sending this';
 function message(it, t) {
   const who = it.identity ? ` Become ${it.identity}.` : '';
-  const body = it.before ? `In ${it.before} minutes, at ${t}.${who}` : `It's time. Do some work, idiot.${who}`;
-  return { title: it.name, body, tag: `h-${it.id}`, hid: it.id };
+  const body = it.before ? `${it.name}, in ${it.before} minutes at ${t}.${who}` : `${it.name}. It's time. Do some work, idiot.${who}`;
+  return { title: TITLE, body, tag: `h-${it.id}`, hid: it.id };
 }
 
 /* ---------- input checks ---------- */
@@ -107,7 +108,7 @@ export default {
     if (url.pathname === '/test') {
       const dev = all[id];
       if (!dev) return json({ error: 'this phone is not registered yet' }, 404, h);
-      const status = await sendPush(dev.sub, { title: 'Reminders are on', body: 'This is what a nudge looks like. Now go do some work.', tag: 'test' }, env, { ttl: 300 });
+      const status = await sendPush(dev.sub, { title: TITLE, body: 'Reminders are on. This is what a nudge looks like. Now go do some work.', tag: 'test' }, env, { ttl: 300 });
       if (status === 404 || status === 410) { delete all[id]; await env.KV.put(KEY, JSON.stringify(all)); }
       return json({ ok: status >= 200 && status < 300, status }, 200, h);
     }

@@ -420,7 +420,7 @@
         sky(ctx, s, H, W, [[0, 'rgba(40,50,70,.35)'], [.4, 'rgba(30,38,55,.15)'], [1, 'rgba(20,25,35,.25)']]);
         s.next -= dt;
         if (s.next <= 0) {
-          s.next = R(5, 11); s.flash = 1;
+          s.next = R(5, 11); s.flash = 1; dispatchEvent(new Event('fx:lightning'));
           let x = R(W * .15, W * .85), y = H * .18; const pts = [[x, y]];
           while (y < H * R(.55, .8)) { x += R(-26, 26); y += R(18, 40); pts.push([x, y]); }
           s.bolt = pts;

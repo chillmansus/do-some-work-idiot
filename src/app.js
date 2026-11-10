@@ -63,6 +63,7 @@ const MTITLE = { 1: 'First step to greatness!', 3: 'Three votes cast!', 5: 'Five
 const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const STANDALONE = (() => { try { return window.top === window; } catch { return false; } })();
 const haptic = p => { try { navigator.vibrate && navigator.vibrate(p); } catch { } };
+const sfx = (n, o) => { try { window.SFX && SFX.play(n, o); } catch { } };
 const fmtDate = s => { const d = parse(s); return `${MON[d.getMonth()]} ${d.getDate()}${d.getFullYear() !== new Date().getFullYear() ? ', ' + d.getFullYear() : ''}`; };
 const unitLbl = (n, u) => (u === 'times' && Number(n) === 1 ? 'time' : u);
 
@@ -274,7 +275,7 @@ async function fetchPartner() {
       if (added.length && !joining) lsSet(DK.code, null);
       PARTNERS = list;
       lsSet(DK.cache, JSON.stringify(PARTNERS));
-      if (added.length) { toast(pairedMsg(added)); haptic([20, 40, 20]); shareNow(true).catch(() => { }); }
+      if (added.length) { toast(pairedMsg(added)); haptic([20, 40, 20]); sfx('paired'); shareNow(true).catch(() => { }); }
       else if (gone.length) toast(`${realName(gone[0].name) || 'A partner'} left your Duo`);
     } else if (duoOn()) duoEnded(true);
   } catch { partnerErr = true; }
@@ -415,7 +416,7 @@ async function duoNudge(a) {
   a.disabled = true;
   try {
     const r = await api('/nudge', P.ref ? { partner: P.ref } : {});
-    if (r.sent) { toast(`Nudged ${P.name}`); haptic([10, 30, 10]); }
+    if (r.sent) { toast(`Nudged ${P.name}`); haptic([10, 30, 10]); sfx('nudge'); }
     else toast(r.reason === 'off' ? `${P.name} turned nudges off` : r.reason === 'no-push' ? `${P.name} hasn't turned on reminders yet` : "The nudge didn't go through. Try again.");
   } catch { toast("Couldn't reach the server"); }
   a.disabled = false;
@@ -528,7 +529,7 @@ function schedText(h) {
 const layers = [];
 let suppressPop = 0;
 function pushLayer(el, onClose) {
-  $('#layers').append(el);
+  $('#layers').append(el); sfx('open');
   const L = { el, onClose, closed: false };
   layers.push(L);
   if (STANDALONE) { try { history.pushState({ layer: layers.length }, ''); } catch { } }
@@ -537,7 +538,7 @@ function pushLayer(el, onClose) {
 }
 function closeLayer(L, fromPop) {
   if (!L || L.closed) return;
-  L.closed = true;
+  L.closed = true; sfx('close');
   layers.splice(layers.indexOf(L), 1);
   L.el.classList.remove('in'); L.el.classList.add('out');
   setTimeout(() => L.el.remove(), 420);
@@ -620,7 +621,7 @@ function go(tab) {
     const vt = document.startViewTransition(doit);
     vt.ready.catch(() => { }); vt.finished.catch(() => { });
   } else doit();
-  haptic(6);
+  haptic(6); sfx('tab');
 }
 function topHTML(withDays) {
   const initial = (D.name || 'Y').trim().charAt(0).toUpperCase() || 'Y';
@@ -761,7 +762,7 @@ function originOf(btn, h) {
 function logTo(h, nv, btn, held = null) {
   const day = UI.day;
   if (day < h.start) { toast("Can't log before this habit's start date"); return; }
-  const was = isDone(h, day), r0 = reps(h);
+  const was = isDone(h, day), r0 = reps(h), v0 = val(h, day);
   const o = held ? held.o : originOf(btn, h);
   const rect = held ? held.rect : btn ? btn.getBoundingClientRect() : null;
   setVal(h, day, Math.max(0, nv));
@@ -776,11 +777,15 @@ function logTo(h, nv, btn, held = null) {
     const days = $('.days'); if (days) days.outerHTML = daysHTML();
   } else render({ still: true });
   if (now && !was) {
-    haptic([12, 50, 20]);
+    haptic([12, 50, 20]); sfx(held ? 'held' : 'done');
     if (rect) burst(rect, h.color);
     const r1 = reps(h), m = MILESTONES.find(x => x > r0 && x <= r1);
     if (m || held) setTimeout(() => celebrate(h, m || null), held ? 420 : 950);
-  } else haptic(8);
+  } else {
+    haptic(8);
+    const v1 = val(h, day);
+    sfx(!now && was ? 'undo' : v1 > v0 ? 'plus' : v1 < v0 ? 'minus' : 'tap', { p: h.goal ? v1 / h.goal : 0 });
+  }
 }
 
 /* ---------- press and hold a card to complete it ---------- */
@@ -802,12 +807,13 @@ function holdStart(e) {
   }
   card.style.setProperty('--ox', o.x + '%'); card.style.setProperty('--oy', o.y + '%');
   card.classList.add('holding'); haptic(5);
+  HOLD.stop = window.SFX ? SFX.charge(HOLD_MS) : () => { };
   HOLD.t = setTimeout(() => {
-    const x = HOLD; HOLD = null; x.card.classList.remove('holding');
+    const x = HOLD; HOLD = null; x.card.classList.remove('holding'); x.stop();
     logTo(x.h, Math.max(val(x.h, UI.day), x.h.goal), null, x);
   }, HOLD_MS);
 }
-function holdEnd() { if (!HOLD) return; clearTimeout(HOLD.t); HOLD.card.classList.remove('holding'); HOLD = null; }
+function holdEnd() { if (!HOLD) return; clearTimeout(HOLD.t); if (HOLD.stop) HOLD.stop(); HOLD.card.classList.remove('holding'); HOLD = null; }
 function burst(rect, color, n = 16, gold = false) {
   if (reduce) return;
   const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
@@ -862,6 +868,7 @@ function medalSVG(n) {
 }
 // m = milestone just reached, or null for a plain "habit completed" page.
 function celebrate(h, m) {
+  sfx(m ? 'milestone' : 'page');
   const t = today();
   const week = Array.from({ length: 7 }, (_, k) => addDays(t, k - 6));
   const r = reps(h), next = MILESTONES.find(x => x > r);
@@ -1482,7 +1489,7 @@ function paintFocusPill() {
 }
 function fStart() {
   if (FS.done || FS.left <= 0) { FS.left = FS.total; FS.done = false; }
-  FS.end = Date.now() + FS.left * 1000; FS.running = true;
+  FS.end = Date.now() + FS.left * 1000; FS.running = true; sfx('start');
   clearInterval(FS.timer); FS.timer = setInterval(fTick, 250);
   try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); } catch { }
   try { navigator.wakeLock && navigator.wakeLock.request('screen').then(w => { wake = w; }).catch(() => { }); } catch { }
@@ -1547,6 +1554,7 @@ function profileSheet() {
     body: `<input class="field" id="pname" placeholder="Your name" value="${esc(D.name)}" aria-label="Your name" style="font:300 24px var(--serif)">
       <div class="stats" style="margin-top:12px"><div class="stat"><b>${live().length}</b><small>Active habits</small></div><div class="stat"><b>${total}</b><small>Votes cast</small></div><div class="stat"><b>${all.filter(h => h.fame).length}</b><small>Hall of Fame</small></div></div>
       ${themesHTML()}
+      ${soundHTML()}
       <p class="sec-label">Reminders</p>
       <div id="remsec">${remindersHTML()}</div>
       <p class="sec-label">Notification text</p>
@@ -1567,6 +1575,8 @@ function profileSheet() {
     onClose: () => render({ still: true }),
     mount: L => {
       L.el.querySelector('#pname').addEventListener('input', e => { D.name = e.target.value.slice(0, 40); save(); });
+      const vr = L.el.querySelector('#svol');
+      if (vr) { vr.addEventListener('input', () => SFX.setVolume(vr.value / 100)); vr.addEventListener('change', () => sfx('done')); }
       const upd = () => {
         D.msg = { title: L.el.querySelector('#mtitle').value.slice(0, 60), line: L.el.querySelector('#mline').value.slice(0, 120) };
         save(); paintMsgPreview(L.el);
@@ -1588,9 +1598,11 @@ function profileSheet() {
       msgPick: (a, e, L) => { const f = L.el.querySelector('#mline'); f.value = a.dataset.v; f.dispatchEvent(new Event('input')); haptic(4); },
       msgReset: (a, e, L) => { D.msg = null; save(); L.el.querySelector('#msgsec').innerHTML = msgHTML(); haptic(4); toast('Back to the original words'); },
       theme: (a, e, L) => {
-        FX.setTheme(a.dataset.v); haptic(6);
+        FX.setTheme(a.dataset.v); haptic(6); if (window.SFX) SFX.theme(a.dataset.v); sfx('theme');
         L.el.querySelectorAll('.theme').forEach(b => { const on = b === a; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
       },
+      sfxOn: a => { SFX.setOn(!SFX.on()); a.classList.toggle('on', SFX.on()); a.setAttribute('aria-checked', SFX.on()); haptic(4); },
+      ambOn: a => { SFX.setAmbient(!SFX.ambient()); a.classList.toggle('on', SFX.ambient()); a.setAttribute('aria-checked', SFX.ambient()); haptic(4); },
       motion: a => { FX.setMotion(!FX.motion()); a.classList.toggle('on', FX.motion()); a.setAttribute('aria-checked', FX.motion()); haptic(4); },
       download: () => {
         try {
@@ -1632,6 +1644,16 @@ function msgHTML() {
     <div class="times" style="margin-top:10px">${MSG_IDEAS.map(x => `<button class="tchip" data-a="msgPick" data-v="${esc(x)}">${esc(x)}</button>`).join('')}</div>
     <div class="npreview" id="mprev" aria-label="Preview">${msgPreview()}</div>
     ${m.title || m.line ? `<button class="link" data-a="msgReset" style="margin-top:6px">Use the original words</button>` : ''}`;
+}
+function soundHTML() {
+  if (!window.SFX || !SFX.supported) return '';
+  const sw = (a, on, t, s) => `<div class="row-sb" style="margin-top:12px"><div><b style="font-weight:600;font-size:14px">${t}</b><p class="small-note" style="margin:2px 0 0">${s}</p></div>
+    <button class="switch ${on ? 'on' : ''}" data-a="${a}" role="switch" aria-checked="${on}" aria-label="${t}"></button></div>`;
+  return `<p class="sec-label">Sound</p>
+    ${sw('sfxOn', SFX.on(), 'Sound effects', 'Taps, logging, finishing a habit, milestones.')}
+    ${sw('ambOn', SFX.ambient(), 'Theme sound', 'Plays your theme quietly: waves, rain, birds, crickets, fire.')}
+    <label class="vol"><span>Volume</span><input type="range" id="svol" min="0" max="100" step="1" value="${Math.round(SFX.volume() * 100)}" aria-label="Volume"></label>
+    <p class="small-note">Uses the phone's media volume, so silent mode does not mute it.</p>`;
 }
 function themesHTML() {
   if (!window.FX) return '';
@@ -1723,6 +1745,8 @@ document.addEventListener('click', e => {
   if (a && ACT[a.dataset.act]) ACT[a.dataset.act](a, e);
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && layers.length) closeTop(); });
+// small ticks for switches, chips and pickers (bigger actions play their own sound)
+document.addEventListener('click', e => { if (e.target.closest('.switch, .tchip, .dow, .cdot, .opt, .seg button, .segs button')) sfx('tick'); }, true);
 {
   const v = $('#view');
   v.addEventListener('pointerdown', holdStart);

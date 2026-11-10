@@ -12,6 +12,8 @@ only what it needs to ring: habit names, times, days, snoozes and which habits a
   so partners never see each other. Each phone proves who it is with its own secret key (the server keeps a hash).
 - 18 app themes (`src/fx.js`, incl. dawn, golden hour, sunset, twilight, moonlight, storm): each changes the background colors and draws its own moving scene on one canvas
   behind the content (fish, leaves, petals, stars, rain...), capped at 30 fps and paused when the app is hidden.
+- Sound (`src/sfx.js`): UI sounds and a quiet ambient soundscape per theme, all synthesized with Web Audio
+  (no audio files). Theme sound is off by default and stops while the app is hidden.
 - 30 habit colors live in one table (`PALETTE` in `src/app.js`); ink text reaches 4.5:1 on every gradient stop.
 - `server/` is the reminder and Duo server: a Cloudflare Worker with a cron every minute, KV storage and Web Push
   (VAPID + aes128gcm on plain WebCrypto). Each phone can set its own notification title and line. `npm test` checks the encryption and timing; `npx wrangler deploy` ships it.

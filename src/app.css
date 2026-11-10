@@ -541,6 +541,8 @@ svg { flex: none; }
 }
 .npreview b { font-weight: 600; color: var(--text); }
 .npreview span { color: var(--muted); }
+.vol { display: flex; align-items: center; gap: 14px; margin-top: 16px; font: 600 14px var(--sans); }
+.vol input { flex: 1; accent-color: var(--ivory); height: 28px; }
 .themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .theme {
   position: relative; height: 96px; padding: 10px 11px; border-radius: 20px; border: 1px solid rgba(255, 255, 255, .1); overflow: hidden;

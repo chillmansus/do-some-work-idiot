@@ -1,11 +1,11 @@
-// Server for Do Some Work Idiot: habit reminders (web push) and the two-person Duo mode.
+// Server for Do Some Work Idiot: habit reminders (web push) and Duo mode (private two-way links, up to 5 per phone).
 //
 // Storage (Workers KV, one small key per thing so two phones never overwrite each other):
 //   idx            list of device ids that have a push subscription (the cron walks this)
 //   dev:<id>       push subscription, time zone and reminder schedule of one phone
 //   auth:<id>      sha-256 of that phone's secret key (set on first contact, then required)
-//   share:<id>     what that phone shares with its partner: name and today's progress
-//   pair:<id>      who that phone is paired with
+//   share:<id>     what that phone shares with its partners: name and today's progress
+//   pair:<id>      who that phone is paired with: { partners: [ids] } (first version: { partner: id })
 //   code:<CODE>    one-time invite code -> inviter id (expires after 24 h)
 //   invite:<id>    the invite code currently open for that phone
 //   fail:<id>      wrong-code counter (stops guessing)
@@ -18,6 +18,7 @@ const PUSH_HOSTS = ['fcm.googleapis.com', 'android.googleapis.com', 'push.servic
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L
 const CODE_TTL = 24 * 3600;
 const MAX_FAILS = 10;
+const MAX_PARTNERS = 5;
 
 /* ---------- input checks ---------- */
 const str = (v, n) => String(v ?? '').slice(0, n);
@@ -134,34 +135,58 @@ async function test(env, id) {
 }
 async function remove(env, id) { await dropDevice(env, id); return ok(); }
 
+/* ---------- duo links ---------- */
+// A phone can be linked to up to MAX_PARTNERS others. Every link is two-way and private to that pair:
+// if A is linked to B and C, A sees both, while B and C each see only A.
+async function partnersOf(env, id) {
+  const pr = await kget(env, 'pair:' + id);
+  if (!pr) return [];
+  if (Array.isArray(pr.partners)) return pr.partners.filter(x => typeof x === 'string');
+  return pr.partner ? [pr.partner] : []; // first version: one partner
+}
+const savePartners = (env, id, list) => list.length ? kput(env, 'pair:' + id, { partners: list }) : kdel(env, 'pair:' + id);
+const refOf = async (me, other) => (await sha256(me + ':' + other)).slice(0, 16);
+async function pickPartner(env, id, ref) {
+  const list = await partnersOf(env, id);
+  if (!ref) return list[0] || null;
+  for (const p of list) if (await refOf(id, p) === ref) return p;
+  return null;
+}
+
 async function share(env, id, b) {
   const next = cleanShare(b);
   if (!next.date) return fail('bad date');
   const prev = await kget(env, 'share:' + id);
   const same = prev && JSON.stringify({ n: prev.name, d: prev.date, r: prev.rows, p: prev.prefs }) === JSON.stringify({ n: next.name, d: next.date, r: next.rows, p: next.prefs });
   if (!same) await kput(env, 'share:' + id, { ...next, updated: Date.now() });
-  const pr = await kget(env, 'pair:' + id);
-  if (!pr) return ok({ linked: false });
+  const list = await partnersOf(env, id);
+  if (!list.length) return ok({ linked: false });
   const wasDone = !!prev && prev.date === next.date && allDone(prev);
   if (!same && allDone(next) && !wasDone) {
-    const theirs = await kget(env, 'share:' + pr.partner);
-    if (!theirs || theirs.prefs.fin) await notify(env, pr.partner, { title: `${nameOf(next)} finished everything today`, body: 'Your turn. Do some work, idiot.', tag: 'fin', tab: 'duo' });
+    await Promise.all(list.map(async p => {
+      const theirs = await kget(env, 'share:' + p);
+      if (!theirs || theirs.prefs.fin) await notify(env, p, { title: `${nameOf(next)} finished everything today`, body: 'Your turn. Do some work, idiot.', tag: 'fin', tab: 'duo' });
+    }));
   }
   return ok({ linked: true });
 }
 async function partner(env, id) {
-  const pr = await kget(env, 'pair:' + id);
-  if (!pr) return ok({ linked: false });
-  const [sh, dev] = await Promise.all([kget(env, 'share:' + pr.partner), kget(env, 'dev:' + pr.partner)]);
-  return ok({
-    linked: true,
-    name: nameOf(sh), date: sh ? sh.date : null, rows: sh ? sh.rows : [], updated: sh ? sh.updated : null,
-    canNudge: !!(dev && dev.sub) && (!sh || sh.prefs.nudge),
-    nudgeOff: !!sh && !sh.prefs.nudge, noPush: !(dev && dev.sub),
-  });
+  const list = await partnersOf(env, id);
+  if (!list.length) return ok({ linked: false, partners: [], max: MAX_PARTNERS });
+  const partners = await Promise.all(list.map(async p => {
+    const [sh, dev] = await Promise.all([kget(env, 'share:' + p), kget(env, 'dev:' + p)]);
+    return {
+      ref: await refOf(id, p),
+      name: nameOf(sh), date: sh ? sh.date : null, rows: sh ? sh.rows : [], updated: sh ? sh.updated : null,
+      canNudge: !!(dev && dev.sub) && (!sh || sh.prefs.nudge),
+      nudgeOff: !!sh && !sh.prefs.nudge, noPush: !(dev && dev.sub),
+    };
+  }));
+  const { ref, ...first } = partners[0]; // top-level copy of the first partner for older app versions
+  return ok({ linked: true, ...first, partners, max: MAX_PARTNERS });
 }
 async function invite(env, id) {
-  if (await kget(env, 'pair:' + id)) return fail('you are already paired', 409);
+  if ((await partnersOf(env, id)).length >= MAX_PARTNERS) return fail(`you already have ${MAX_PARTNERS} partners`, 409);
   const old = await kget(env, 'invite:' + id);
   if (old && old.code) await kdel(env, 'code:' + old.code);
   let code = makeCode();
@@ -180,33 +205,52 @@ async function join(env, id, b) {
     return fail("That code doesn't work. It may have expired.", 404);
   }
   if (rec.id === id) return fail("That's your own code. Send it to your partner.");
-  if (await kget(env, 'pair:' + id)) return fail('you are already paired', 409);
-  if (await kget(env, 'pair:' + rec.id)) { await kdel(env, 'code:' + code); return fail('that person is already paired', 409); }
-  await Promise.all([kput(env, 'pair:' + id, { partner: rec.id }), kput(env, 'pair:' + rec.id, { partner: id })]);
+  const [mine, theirs] = await Promise.all([partnersOf(env, id), partnersOf(env, rec.id)]);
+  if (mine.includes(rec.id)) { await kdel(env, 'code:' + code); return fail("You're already paired with them.", 409); }
+  if (mine.length >= MAX_PARTNERS) return fail(`you already have ${MAX_PARTNERS} partners`, 409);
+  if (theirs.length >= MAX_PARTNERS) { await kdel(env, 'code:' + code); return fail('that person already has the most partners allowed', 409); }
+  await Promise.all([savePartners(env, id, [...mine, rec.id]), savePartners(env, rec.id, [...theirs, id])]);
   await Promise.all([kdel(env, 'code:' + code), kdel(env, 'invite:' + rec.id), kdel(env, 'fail:' + id)]);
   const who = str(b.name, 40).trim() || 'Your partner';
   await notify(env, rec.id, { title: 'Duo connected', body: `${who} joined. Check how they're doing.`, tag: 'pair', tab: 'duo' });
   return ok();
 }
-async function leave(env, id) {
-  const pr = await kget(env, 'pair:' + id);
+// Ends one link (b.partner = its ref) or, without a ref, every link of this phone.
+// A phone's shared progress is deleted from the server once it has no partners left.
+async function leave(env, id, b) {
+  const list = await partnersOf(env, id);
+  let gone = list;
+  if (b.partner) {
+    const p = await pickPartner(env, id, str(b.partner, 32));
+    if (!p) return fail('not paired with that person', 404);
+    gone = [p];
+  }
+  const rest = list.filter(x => !gone.includes(x));
   const mine = await kget(env, 'share:' + id);
-  const inv = await kget(env, 'invite:' + id);
-  const jobs = [kdel(env, 'pair:' + id), kdel(env, 'share:' + id), kdel(env, 'invite:' + id)];
-  if (inv && inv.code) jobs.push(kdel(env, 'code:' + inv.code));
-  if (pr) jobs.push(kdel(env, 'pair:' + pr.partner), kdel(env, 'share:' + pr.partner));
+  const jobs = [savePartners(env, id, rest)];
+  if (!rest.length) jobs.push(kdel(env, 'share:' + id));
+  if (!b.partner) {
+    const inv = await kget(env, 'invite:' + id);
+    jobs.push(kdel(env, 'invite:' + id));
+    if (inv && inv.code) jobs.push(kdel(env, 'code:' + inv.code));
+  }
+  for (const p of gone) {
+    const theirs = (await partnersOf(env, p)).filter(x => x !== id);
+    jobs.push(savePartners(env, p, theirs));
+    if (!theirs.length) jobs.push(kdel(env, 'share:' + p));
+  }
   await Promise.all(jobs);
-  if (pr) await notify(env, pr.partner, { title: 'Duo ended', body: `${nameOf(mine)} left. Your shared progress is gone from the server.`, tag: 'pair', tab: 'duo' });
-  return ok();
+  await Promise.all(gone.map(p => notify(env, p, { title: 'Duo ended', body: `${nameOf(mine)} left. Your shared progress with them is gone from the server.`, tag: 'pair', tab: 'duo' })));
+  return ok({ left: gone.length, partners: rest.length });
 }
-async function nudge(env, id) {
-  const pr = await kget(env, 'pair:' + id);
-  if (!pr) return fail('you are not paired', 409);
-  const [theirs, mine] = await Promise.all([kget(env, 'share:' + pr.partner), kget(env, 'share:' + id)]);
+async function nudge(env, id, b) {
+  const p = await pickPartner(env, id, b.partner ? str(b.partner, 32) : null);
+  if (!p) return fail('you are not paired', 409);
+  const [theirs, mine] = await Promise.all([kget(env, 'share:' + p), kget(env, 'share:' + id)]);
   if (theirs && !theirs.prefs.nudge) return ok({ sent: false, reason: 'off' });
-  const dev = await kget(env, 'dev:' + pr.partner);
+  const dev = await kget(env, 'dev:' + p);
   if (!dev || !dev.sub) return ok({ sent: false, reason: 'no-push' });
-  const sent = await notify(env, pr.partner, { title: `${nameOf(mine)} nudged you`, body: 'Do some work, idiot.', tag: 'nudge', tab: 'duo' });
+  const sent = await notify(env, p, { title: `${nameOf(mine)} nudged you`, body: 'Do some work, idiot.', tag: 'nudge', tab: 'duo' });
   return ok({ sent, reason: sent ? null : 'failed' });
 }
 

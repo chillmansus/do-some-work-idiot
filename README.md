@@ -7,8 +7,10 @@ only what it needs to ring: habit names, times, days, snoozes and which habits a
 - `src/` is the source: plain HTML, CSS and JavaScript, no framework.
 - `node build.mjs` builds the installable app into `dist/` (page shell, manifest, icons, service worker).
 - Every push to `main` builds and publishes to GitHub Pages.
-- Duo: two phones pair with a one-time 6-letter code and see each other's progress on shared habits for today,
-  with nudges and "finished everything" alerts. Each phone proves who it is with its own secret key (the server keeps a hash).
+- Duo: phones pair with a one-time 6-letter code and see each other's progress on shared habits for today,
+  with nudges and "finished everything" alerts. A phone can have up to 5 partners; each link is private to its two phones,
+  so partners never see each other. Each phone proves who it is with its own secret key (the server keeps a hash).
+- 30 habit colors live in one table (`PALETTE` in `src/app.js`); ink text reaches 4.5:1 on every gradient stop.
 - `server/` is the reminder and Duo server: a Cloudflare Worker with a cron every minute, KV storage and Web Push
   (VAPID + aes128gcm on plain WebCrypto). `npm test` checks the encryption and timing; `npx wrangler deploy` ships it.
   The VAPID private key is a Worker secret and lives locally in `server/.dev.vars`, which is never committed.

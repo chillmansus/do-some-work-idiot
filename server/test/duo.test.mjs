@@ -90,7 +90,70 @@ test('a code works once, not for yourself, and guessing is limited', async () =>
   for (let i = 0; i < 10; i++) await call(env, '/join', as(d, { code: 'ZZZZZ' + i }));
   const [st] = await call(env, '/join', as(d, { code: inv.code }));
   assert.equal(st, 429);
-  assert.equal((await call(env, '/invite', as(b)))[0], 409);
+  // already paired with each other: a second code between the same two does nothing
+  const [, again] = await call(env, '/invite', as(a));
+  assert.equal((await call(env, '/join', as(b, { code: again.code })))[0], 409);
+});
+
+test('a hub sees every partner, each partner sees only the hub', async () => {
+  const { env, pushes } = await setup();
+  const hub = phone(), x = phone(), y = phone();
+  for (const p of [hub, x, y]) await reg(env, p);
+  for (const p of [x, y]) {
+    const [, inv] = await call(env, '/invite', as(hub));
+    assert.equal((await call(env, '/join', as(p, { code: inv.code })))[0], 200);
+  }
+  await call(env, '/share', shareOf(hub, [row('h', false)], { name: 'Hub' }));
+  await call(env, '/share', shareOf(x, [row('x', true)], { name: 'X' }));
+  await call(env, '/share', shareOf(y, [row('y', false)], { name: 'Y' }));
+  const [, seenByHub] = await call(env, '/partner', as(hub));
+  assert.deepEqual(seenByHub.partners.map(p => p.name), ['X', 'Y']);
+  assert.equal(seenByHub.name, 'X', 'old app versions still get the first partner at the top level');
+  for (const p of [x, y]) {
+    const [, seen] = await call(env, '/partner', as(p));
+    assert.deepEqual(seen.partners.map(q => q.name), ['Hub']);
+  }
+  // a nudge goes only to the chosen partner
+  pushes.length = 0;
+  const yRef = seenByHub.partners[1].ref;
+  assert.equal((await call(env, '/nudge', as(hub, { partner: yRef })))[1].sent, true);
+  assert.deepEqual(pushes.map(p => p.id), [y.id]);
+  // finishing everything tells every partner
+  pushes.length = 0;
+  await call(env, '/share', shareOf(hub, [row('h', true)], { name: 'Hub' }));
+  assert.deepEqual(pushes.map(p => p.id).sort(), [x.id, y.id].sort());
+  // a ref from someone else's view does not work for you
+  assert.equal((await call(env, '/nudge', as(x, { partner: yRef })))[0], 409);
+  // leaving one link keeps the other, and keeps the hub's share for the one left
+  pushes.length = 0;
+  await call(env, '/leave', as(hub, { partner: yRef }));
+  assert.deepEqual(pushes.map(p => p.id), [y.id]);
+  assert.deepEqual((await call(env, '/partner', as(hub)))[1].partners.map(p => p.name), ['X']);
+  assert.equal((await call(env, '/partner', as(y)))[1].linked, false);
+  assert.equal(env.KV.m.has(`share:${hub.id}`), true);
+  assert.equal(env.KV.m.has(`share:${y.id}`), false);
+  assert.equal(env.KV.m.has(`share:${x.id}`), true);
+});
+
+test('a phone can have at most 5 partners, and old single-partner records still work', async () => {
+  const { env } = await setup();
+  const hub = phone();
+  for (let i = 0; i < 5; i++) {
+    const [, inv] = await call(env, '/invite', as(hub));
+    assert.equal((await call(env, '/join', as(phone(), { code: inv.code })))[0], 200);
+  }
+  assert.equal((await call(env, '/invite', as(hub)))[0], 409);
+  // first-version record
+  const a = phone(), b = phone();
+  env.KV.m.set('pair:' + a.id, JSON.stringify({ partner: b.id }));
+  env.KV.m.set('pair:' + b.id, JSON.stringify({ partner: a.id }));
+  await call(env, '/share', shareOf(b, [], { name: 'B' }));
+  const [, seen] = await call(env, '/partner', as(a));
+  assert.deepEqual(seen.partners.map(p => p.name), ['B']);
+  const c = phone();
+  const [, inv] = await call(env, '/invite', as(a));
+  assert.equal((await call(env, '/join', as(c, { code: inv.code })))[0], 200);
+  assert.equal((await call(env, '/partner', as(a)))[1].partners.length, 2);
 });
 
 test('finishing everything tells the partner once, and respects their switch', async () => {

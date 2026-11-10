@@ -29,12 +29,7 @@
   --gr: max(16px, env(safe-area-inset-right, 0px));
 }
 
-.c-ember  { --c1: #ffb45e; --c2: #ff5a1f; }
-.c-orchid { --c1: #f59be6; --c2: #a64df2; }
-.c-honey  { --c1: #ffe38a; --c2: #f7a428; }
-.c-lagoon { --c1: #86ecfb; --c2: #1c98e0; }
-.c-moss   { --c1: #d3f58a; --c2: #36b85b; }
-.c-coral  { --c1: #ffb0a8; --c2: #f03e5c; }
+/* habit colors (.c-<id>: --c1, --c2, --on) are made in app.js from PALETTE */
 
 * { box-sizing: border-box; }
 html, body { height: 100%; background: var(--bg); color: var(--text); }
@@ -164,7 +159,7 @@ svg { flex: none; }
 .badge {
   position: absolute; top: -10px; right: 4px; z-index: 3; width: 58px; height: 64px; border-radius: 21px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
-  background: linear-gradient(155deg, var(--c1), var(--c2)); color: #fff; font: 700 20px var(--sans);
+  background: linear-gradient(155deg, var(--c1), var(--c2)); color: var(--on, #fff); font: 700 20px var(--sans);
   box-shadow: 0 12px 26px -10px var(--c2); font-variant-numeric: tabular-nums;
 }
 .habit.done .badge { background: var(--ivory); color: var(--ink); box-shadow: 0 12px 26px -12px rgba(0, 0, 0, .7); }
@@ -536,8 +531,9 @@ svg { flex: none; }
 .tchip.add { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 #befs .tchip { height: 38px; padding: 0 14px; font-size: 14px; transition: background .25s, color .25s; }
 #befs .tchip.on { background: var(--ivory); color: var(--ink); border-color: transparent; }
-.colors { display: flex; gap: 14px; flex-wrap: wrap; }
-.cdot { width: 34px; height: 34px; border-radius: 50%; border: 0; background: linear-gradient(155deg, var(--c1), var(--c2)); outline: 2px solid transparent; outline-offset: 3px; transition: outline-color .25s, transform .3s var(--spring); }
+.times[hidden] { display: none; }
+.colors { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px 10px; justify-items: center; }
+.cdot { width: 38px; height: 38px; padding: 0; cursor: pointer; border-radius: 50%; border: 0; background: linear-gradient(155deg, var(--c1), var(--c2)); outline: 2px solid transparent; outline-offset: 3px; transition: outline-color .25s, transform .3s var(--spring); }
 .cdot.on { outline-color: var(--ivory); transform: scale(1.06); }
 .small-note { margin: 8px 0 0; color: var(--faint); font-size: 12px; }
 
@@ -585,6 +581,12 @@ svg { flex: none; }
 .duo-sub { margin: 10px 0 0; color: var(--faint); font: 500 11px var(--sans); }
 .duo-act { padding-top: 14px; }
 .duo-act .btn:disabled { opacity: .45; }
+.duo-sum.many .duo-num { font-size: 44px; }
+.duo-sum.odd .duo-tile:first-child { grid-column: 1 / -1; }
+.duo-sum.many .duo-num span { font-size: 24px; }
+.duo-nudge { width: 100%; margin-top: 12px; }
+.duo-nudge:disabled { opacity: .45; }
+.btn.duo-leave { width: auto; height: 40px; padding: 0 18px; font-size: 14px; }
 .dstreak { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); font: 600 13px var(--sans); font-variant-numeric: tabular-nums; }
 .dcheck { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid var(--line-2); display: grid; place-items: center; flex: none; }
 .dcheck.on { border: 0; background: linear-gradient(155deg, var(--c1), var(--c2)); color: var(--ink); }

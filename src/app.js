@@ -59,6 +59,7 @@ const I = {
   swap: ic('<path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/>', 18, 2),
   copy: ic('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>', 20),
   clock: ic('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', 18, 2),
+  duo: ic('<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.5" cy="9" r="2.6"/><path d="M15.6 14.1c2.5-.2 4.5 1.4 4.9 4.4"/>', 30, 1.8),
 };
 const flameSVG = c => `<svg class="flame" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2c1 4 6 6.5 6 12a6 6 0 0 1-12 0c0-3 1.5-5 3-6.5.5 2 1.5 3 2.5 3.5C11 8 10.5 5 12 2z" fill="url(#g-${c})"/></svg>`;
 const HEXPTS = '86,50 68,18.8 32,18.8 14,50 32,81.2 68,81.2';
@@ -73,7 +74,7 @@ function save() {
   try { localStorage.setItem(KEY, JSON.stringify(D)); } catch { }
   // Ask the browser not to clear our data when the phone runs low on space.
   if (!persistAsked && D.habits.length) { persistAsked = true; try { navigator.storage && navigator.storage.persist && navigator.storage.persist().catch(() => { }); } catch { } }
-  schedSync();
+  schedSync(); schedShare();
 }
 
 /* ---------- reminders (web push) ---------- */
@@ -81,7 +82,7 @@ function save() {
 const PUSH_API = 'https://dswi-reminders.dswi-reminders.workers.dev';
 const VAPID_PUBLIC = 'BMAJ-PRh54PvfXIWVaErHc6nsz2wFk5W3tlwmlbjJ-ePGiSgG-fYhsVFi7WEvtBjuZblZOihmPUMsqUneMVOjQY';
 const BEFORE = [0, 5, 10, 15, 30];
-const PK = { on: 'dswi.push', last: 'dswi.push.last', dev: 'dswi.dev' };
+const PK = { on: 'dswi.push', last: 'dswi.push.last', dev: 'dswi.dev', key: 'dswi.key' };
 const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { } };
 const pushSupported = () => STANDALONE && location.protocol === 'https:' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -91,7 +92,16 @@ function devId() {
   if (!id || !/^[a-z0-9]{8,40}$/.test(id)) { id = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => (b % 36).toString(36)).join(''); lsSet(PK.dev, id); }
   return id;
 }
-const keyBytes = s => { const b = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(b, c => c.charCodeAt(0)); };
+// A secret only this phone knows. The server keeps a hash of it, so nobody else can act as this phone.
+function devKey() {
+  let k = lsGet(PK.key);
+  if (!k || !/^[A-Za-z0-9_-]{22,64}$/.test(k)) {
+    k = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(24)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    lsSet(PK.key, k);
+  }
+  return k;
+}
+const keyBytes =s => { const b = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(b, c => c.charCodeAt(0)); };
 async function pushSub(create) {
   const reg = await navigator.serviceWorker.ready;
   let sub = await reg.pushManager.getSubscription();
@@ -100,7 +110,7 @@ async function pushSub(create) {
 }
 const remindable = () => live().filter(h => h.reminder && h.times.length && h.days.length);
 async function api(path, body) {
-  const r = await fetch(PUSH_API + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(PUSH_API + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, id: devId(), key: devKey() }) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
   return j;
@@ -114,7 +124,7 @@ async function syncPush(force = false) {
     const sub = await pushSub(true);
     const t = today();
     const body = {
-      id: devId(), sub: sub.toJSON(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      v: 2, id: devId(), sub: sub.toJSON(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       items: remindable().map(h => ({ id: h.id, name: h.name, identity: h.identity, days: h.days, times: h.times, before: h.before || 0, start: h.start, snooze: h.snooze, snoozeFrom: h.snoozeFrom })),
       done: { date: t, ids: live().filter(h => isDone(h, t)).map(h => h.id) },
     };
@@ -163,6 +173,211 @@ function reminderNote(d) {
   if (Notification.permission === 'denied') return 'Notifications are blocked for this app in Android settings.';
   if (!pushOn()) return 'Reminders are off on this phone. Saving will ask to turn them on.';
   return 'A notification will ring on this phone.';
+}
+
+/* ---------- duo: two people see each other's progress ---------- */
+// Only today's progress on shared habits leaves the phone. Everything else stays here.
+const DK = { on: 'dswi.duo', last: 'dswi.duo.last', cache: 'dswi.duo.cache', prefs: 'dswi.duo.prefs', code: 'dswi.duo.code' };
+const duoOn = () => lsGet(DK.on) === '1';
+const lsJSON = (k, d) => { try { return JSON.parse(lsGet(k) || 'null') ?? d; } catch { return d; } };
+const duoPrefs = () => Object.assign({ nudge: true, fin: true }, lsJSON(DK.prefs, {}));
+let PARTNER = lsJSON(DK.cache, null), partnerErr = false, fetchingPartner = false, pollT = null, shareT = null;
+function pendingCode() {
+  const c = lsJSON(DK.code, null);
+  if (!c || !c.code || c.exp < Date.now()) { if (c) lsSet(DK.code, null); return null; }
+  return c.code;
+}
+const fmtCode = c => `${c.slice(0, 3)}-${c.slice(3)}`;
+const pairedMsg = () => (PARTNER && PARTNER.name && PARTNER.name !== 'Your partner' ? `Paired with ${PARTNER.name}. Now do some work.` : 'Paired. Now do some work.');
+function myRows(day = today()) {
+  return dayLists(day).sched.filter(h => h.share !== false)
+    .map(h => ({ id: h.id, name: h.name, color: h.color, v: val(h, day), goal: h.goal, unit: h.unit, streak: streak(h), done: isDone(h, day) }));
+}
+function schedShare() { if (!duoOn()) return; clearTimeout(shareT); shareT = setTimeout(() => shareNow().catch(() => { }), 1200); }
+async function shareNow(force = false) {
+  if (!duoOn()) return null;
+  const body = { name: (D.name || '').trim(), date: today(), rows: myRows(), prefs: duoPrefs() };
+  const s = JSON.stringify(body);
+  if (!force && lsGet(DK.last) === s) return null;
+  const r = await api('/share', body);
+  lsSet(DK.last, s);
+  if (r.linked === false) duoEnded(true);
+  return r;
+}
+function duoEnded(byPartner) {
+  const was = duoOn();
+  [DK.on, DK.last, DK.cache].forEach(k => lsSet(k, null));
+  PARTNER = null;
+  if (was && byPartner) toast('Your Duo ended. Your partner left.');
+}
+async function fetchPartner() {
+  if (fetchingPartner) return;
+  fetchingPartner = true;
+  try {
+    const r = await api('/partner', {});
+    partnerErr = false;
+    if (r.linked) {
+      const first = !duoOn();
+      lsSet(DK.on, '1'); lsSet(DK.code, null);
+      PARTNER = { name: r.name, date: r.date, rows: r.rows || [], updated: r.updated, canNudge: r.canNudge, nudgeOff: r.nudgeOff, noPush: r.noPush, at: Date.now() };
+      lsSet(DK.cache, JSON.stringify(PARTNER));
+      if (first) { toast(pairedMsg()); haptic([20, 40, 20]); shareNow(true).catch(() => { }); }
+    } else if (duoOn()) duoEnded(true);
+  } catch { partnerErr = true; }
+  finally { fetchingPartner = false; }
+  paintDuo();
+}
+function paintDuo() {
+  if (UI.tab !== 'duo') return;
+  const v = $('#view'), y = v.scrollTop;
+  v.innerHTML = duoHTML(true); v.scrollTop = y;
+}
+// Poll only while the Duo tab is on screen.
+function duoPoll() {
+  const want = UI.tab === 'duo' && !document.hidden;
+  if (want && !pollT) { fetchPartner(); pollT = setInterval(fetchPartner, 8000); }
+  else if (!want && pollT) { clearInterval(pollT); pollT = null; }
+}
+function agoText(ms) {
+  if (!ms) return 'not yet';
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  return h < 24 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
+}
+function duoRowsHTML(rows) {
+  return rows.map(r => `<div class="row ${COLORS.includes(r.color) ? 'c-' + r.color : 'c-ember'} ${r.done ? 'done' : ''}"><span class="dot"></span>
+    <div class="grow"><span class="nm">${esc(r.name)}</span><small>${r.done ? 'Done' : `${fmt(r.v)} / ${fmt(r.goal)} ${esc(unitLbl(r.goal, r.unit))}`}</small></div>
+    <span class="dstreak" aria-label="Streak ${r.streak}">${I.bolt}${r.streak}</span>
+    <span class="dcheck ${r.done ? 'on' : ''}" aria-label="${r.done ? 'Done' : 'Not done yet'}">${r.done ? I.check : ''}</span></div>`).join('');
+}
+function duoTile(label, rows, sub, i) {
+  const n = rows.length, d = rows.filter(r => r.done).length;
+  return `<div class="duo-tile ${n && d === n ? 'all' : ''}" style="--i:${i}">
+    <p class="eyebrow">${esc(label)}</p>
+    <p class="duo-num">${d}<span>/${n}</span></p>
+    <p class="duo-lbl">${n ? (d === n ? 'All done today' : 'done today') : 'Nothing shared today'}</p>
+    <div class="segs">${rows.map(r => `<i class="${r.done ? 'on' : ''} ${COLORS.includes(r.color) ? 'c-' + r.color : 'c-ember'}"></i>`).join('') || '<i></i>'}</div>
+    ${sub ? `<p class="duo-sub">${sub}</p>` : ''}
+  </div>`;
+}
+function duoHTML(still = false) {
+  const head = `${topHTML(false)}<div class="pad"><h1 class="page-title">Duo</h1>`;
+  if (!duoOn()) {
+    const code = pendingCode();
+    return `${head}<p class="sub">Pair with one other person. You each see how far the other got today, and you can nudge each other.</p></div>
+      <div class="list ${still ? 'still' : ''}" style="gap:18px">
+        <div class="habit norise" style="--i:0"><div class="blob duo-blob">
+          <div class="duo-mark">${I.duo}</div>
+          ${code ? `<p class="eyebrow">Your invite code</p>
+            <button class="duo-code" data-act="duoCopy" aria-label="Copy invite code ${fmtCode(code)}">${fmtCode(code)}</button>
+            <p class="duo-note">Send this to your partner. In their app they open Duo, tap <b>Join with a code</b> and type it in. It works once, for 24 hours.</p>
+            <p class="duo-wait"><i></i>Waiting for them to join</p>`
+          : `<h2 class="duo-h">Do the work together.</h2>
+            <p class="duo-note">Your habits stay on your phone. Your partner only sees today's progress on habits you share, and you see theirs.</p>`}
+        </div></div>
+        <div class="stackbtns duo-btns">
+          ${code ? `<button class="btn" data-act="duoCopy">${I.copy}Copy code</button><button class="btn ghost" data-act="duoInvite">Make a new code</button>`
+                 : `<button class="btn" data-act="duoInvite">${I.plus}Invite partner</button>`}
+          <button class="btn ghost" data-act="duoJoin">Join with a code</button>
+        </div>
+      </div>`;
+  }
+  const P = PARTNER || { name: 'Your partner', rows: [], updated: null };
+  const mine = myRows();
+  const sub = partnerErr ? `Offline. Last seen ${agoText(P.at)}` : `Updated ${agoText(P.updated)}`;
+  const stale = P.date && P.date < addDays(today(), -1) ? `<p class="sec-note">${esc(P.name)} hasn't opened the app since ${fmtDate(P.date)}.</p>` : '';
+  const nudgeNote = P.nudgeOff ? `${esc(P.name)} turned nudges off.` : P.noPush ? `${esc(P.name)} hasn't turned on reminders, so nudges can't reach their phone yet.` : '';
+  return `${head}</div>
+    <div class="duo-sum ${still ? 'still' : ''}">${duoTile('You', mine, '', 0)}${duoTile(P.name, P.rows, sub, 1)}</div>
+    <div class="pad duo-act">
+      <button class="btn" data-act="duoNudge" ${P.canNudge === false ? 'disabled' : ''}>${I.bolt}Nudge ${esc(P.name)}</button>
+      ${nudgeNote ? `<p class="small-note" style="text-align:center">${nudgeNote}</p>` : ''}
+    </div>
+    <div class="list ${still ? 'still' : ''}" style="gap:14px;padding-top:18px">
+      <section class="section" style="--i:2"><div class="sec-head">${esc(P.name)}<span class="n">${P.rows.filter(r => r.done).length}/${P.rows.length}</span></div>
+        ${stale}${P.rows.length ? duoRowsHTML(P.rows) : `<p class="sec-note">Nothing shared for today yet.</p>`}</section>
+      <section class="section" style="--i:3"><div class="sec-head">You<span class="n">${mine.filter(r => r.done).length}/${mine.length}</span></div>
+        ${mine.length ? duoRowsHTML(mine) : `<p class="sec-note">No shared habits scheduled today. Turn on <b>Share with partner</b> in a habit's settings.</p>`}</section>
+      <button class="link" data-act="duoSettings">Duo settings</button>
+    </div>`;
+}
+async function duoInvite() {
+  try {
+    const r = await api('/invite', {});
+    lsSet(DK.code, JSON.stringify({ code: r.code, exp: Date.now() + r.expiresIn * 1000 }));
+    haptic(8); paintDuo();
+  } catch (e) { toast(e.message === 'you are already paired' ? 'You are already paired' : "Couldn't reach the server. Check your internet."); fetchPartner(); }
+}
+function duoCopy() {
+  const c = pendingCode(); if (!c) return;
+  const txt = fmtCode(c);
+  try { navigator.clipboard.writeText(txt).then(() => toast('Code copied. Send it to your partner.'), () => toast(`Your code is ${txt}`)); } catch { toast(`Your code is ${txt}`); }
+}
+function duoJoin() {
+  sheet({
+    title: 'Join a Duo',
+    body: `<p class="muted" style="margin:0 0 14px">Type the 6-letter code your partner sent you.</p>
+      <input class="field duo-input" id="dcode" maxlength="7" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABC-DEF" aria-label="Invite code">
+      ${D.name ? '' : `<input class="field" id="dname" maxlength="40" placeholder="Your name (your partner sees this)" aria-label="Your name" style="margin-top:10px">`}`,
+    foot: `<button class="btn" data-a="go">Join</button>`,
+    mount: L => setTimeout(() => { try { L.el.querySelector('#dcode').focus(); } catch { } }, 350),
+    acts: {
+      go: async (a, e, L) => {
+        const code = L.el.querySelector('#dcode').value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (code.length !== 6) { toast('The code has 6 letters and numbers'); return; }
+        const nm = L.el.querySelector('#dname');
+        if (nm && nm.value.trim()) { D.name = nm.value.trim().slice(0, 40); save(); }
+        a.disabled = true;
+        try {
+          await api('/join', { code, name: (D.name || '').trim() });
+          lsSet(DK.on, '1'); lsSet(DK.code, null); closeLayer(L);
+          await shareNow(true).catch(() => { });
+          await fetchPartner();
+          toast(pairedMsg()); haptic([20, 40, 20]);
+        } catch (err) { a.disabled = false; toast(err.message && !/^HTTP/.test(err.message) ? cap(err.message) : "Couldn't reach the server"); }
+      },
+    },
+  });
+}
+async function duoNudge(a) {
+  if (!PARTNER) return;
+  a.disabled = true;
+  try {
+    const r = await api('/nudge', {});
+    if (r.sent) { toast(`Nudged ${PARTNER.name}`); haptic([10, 30, 10]); }
+    else toast(r.reason === 'off' ? `${PARTNER.name} turned nudges off` : r.reason === 'no-push' ? `${PARTNER.name} hasn't turned on reminders yet` : "The nudge didn't go through. Try again.");
+  } catch { toast("Couldn't reach the server"); }
+  a.disabled = false;
+}
+function duoSettings() {
+  const p = duoPrefs(), nm = PARTNER ? esc(PARTNER.name) : 'your partner';
+  let armed = false;
+  const sw = (k, on, t, s) => `<div class="row" style="padding:14px 0"><div class="grow"><span style="font-weight:600">${t}</span><small>${s}</small></div><button class="switch ${on ? 'on' : ''}" data-a="pref" data-v="${k}" role="switch" aria-checked="${on}" aria-label="${t}"></button></div>`;
+  sheet({
+    title: 'Duo settings',
+    body: `${sw('nudge', p.nudge, 'Nudges', `Let ${nm} nudge you with a notification.`)}
+      ${sw('fin', p.fin, 'Finished alerts', `Tell you when ${nm} finishes everything for the day.`)}
+      <p class="small-note">Both need reminders turned on in your profile to reach this phone.</p>
+      <p class="sec-label">Leave</p>
+      <p class="muted" style="margin:0 0 12px">Leaving ends the Duo for both of you and wipes the shared progress from the server. Your own habits are not touched.</p>
+      <button class="btn danger-ghost" data-a="leave">Leave Duo</button>`,
+    acts: {
+      pref: a => {
+        const k = a.dataset.v, cur = duoPrefs(); cur[k] = !cur[k];
+        lsSet(DK.prefs, JSON.stringify(cur));
+        a.classList.toggle('on', cur[k]); a.setAttribute('aria-checked', cur[k]); haptic(4);
+        shareNow(true).catch(() => toast("Couldn't reach the server. It'll update next time."));
+      },
+      leave: async (a, e, L) => {
+        if (!armed) { armed = true; a.textContent = `Tap again to leave the Duo with ${nm}`; a.classList.replace('danger-ghost', 'danger'); return; }
+        a.disabled = true;
+        try { await api('/leave', {}); duoEnded(false); closeLayer(L); toast('You left the Duo'); paintDuo(); }
+        catch { a.disabled = false; toast("Couldn't reach the server. Try again."); }
+      },
+    },
+  });
 }
 let D = load();
 const UI = { tab: 'home', day: today(), seg: 'progress' };
@@ -298,7 +513,9 @@ function render(opts = {}) {
   const v = $('#view');
   if (UI.tab === 'home') v.innerHTML = homeHTML(opts);
   else if (UI.tab === 'progress') v.innerHTML = progressHTML();
+  else if (UI.tab === 'duo') v.innerHTML = duoHTML(!!opts.still);
   else v.innerHTML = focusHTML();
+  duoPoll();
   document.querySelectorAll('.tab').forEach(t => {
     const on = t.dataset.v === UI.tab;
     t.classList.toggle('on', on); t.setAttribute('aria-current', on ? 'page' : 'false');
@@ -775,8 +992,8 @@ function openFlow(mode, editId) {
   const h = editId ? H(editId) : null;
   const replace = mode === 'replace' || !!(h && h.bad);
   const d = h
-    ? { bad: h.bad || null, _replace: replace, habit: h.habit, when: h.when, identity: h.identity, days: [...h.days], goal: h.goal, unit: h.unit, times: [...h.times], reminder: h.reminder, before: h.before || 0, color: h.color }
-    : { bad: replace ? '' : null, _replace: replace, habit: '', when: '', identity: '', days: [0, 1, 2, 3, 4, 5, 6], goal: 1, unit: 'times', times: [], reminder: true, before: 0, color: COLORS[D.habits.length % COLORS.length] };
+    ? { bad: h.bad || null, _replace: replace, habit: h.habit, when: h.when, identity: h.identity, days: [...h.days], goal: h.goal, unit: h.unit, times: [...h.times], reminder: h.reminder, before: h.before || 0, share: h.share !== false, color: h.color }
+    : { bad: replace ? '' : null, _replace: replace, habit: '', when: '', identity: '', days: [0, 1, 2, 3, 4, 5, 6], goal: 1, unit: 'times', times: [], reminder: true, before: 0, share: true, color: COLORS[D.habits.length % COLORS.length] };
   const fields = replace ? ['bad', 'habit', 'when', 'identity'] : ['habit', 'when', 'identity'];
   const steps = ['intro', ...fields, 'review', 'settings'];
   const F = { d, h, steps, fields, i: h ? steps.length - 1 : 0, ret: false, pi: {}, replace };
@@ -850,6 +1067,8 @@ function openFlow(mode, editId) {
         <div class="set-sec"><div class="row-sb"><b style="font-weight:600;font-size:14px">Send reminder</b><button class="switch ${d.reminder ? 'on' : ''}" data-a="rem" role="switch" aria-checked="${d.reminder}" aria-label="Send reminder"></button></div>
           <div class="times" id="befs" style="margin-top:12px" ${d.reminder ? '' : 'hidden'}>${BEFORE.map(m => `<button class="tchip ${(d.before || 0) === m ? 'on' : ''}" data-a="before" data-v="${m}" aria-pressed="${(d.before || 0) === m}">${m ? m + ' min before' : 'At habit time'}</button>`).join('')}</div>
           <p class="small-note" id="remnote">${reminderNote(d)}</p></div>
+        <div class="set-sec"><div class="row-sb"><b style="font-weight:600;font-size:14px">Share with partner</b><button class="switch ${d.share !== false ? 'on' : ''}" data-a="share" role="switch" aria-checked="${d.share !== false}" aria-label="Share with partner"></button></div>
+          <p class="small-note">Your Duo partner sees today's progress on this habit, nothing else.</p></div>
       </div>
       <div class="fl-foot"><button class="btn" data-a="save" id="fsave" ${d.days.length ? '' : 'disabled'}>${edit ? 'Save changes' : 'Create habit'}</button></div>`;
     const g = root.querySelector('#goal');
@@ -871,7 +1090,7 @@ function openFlow(mode, editId) {
   function saveHabit() {
     const d = F.d;
     if (!d.days.length) return;
-    const data = { name: cap(d.habit), habit: d.habit, when: d.when, identity: d.identity, bad: d._replace ? d.bad : null, days: [...d.days].sort(), goal: d.goal || 1, unit: d.unit, times: [...d.times].sort(), reminder: d.reminder, before: d.before || 0, color: d.color };
+    const data = { name: cap(d.habit), habit: d.habit, when: d.when, identity: d.identity, bad: d._replace ? d.bad : null, days: [...d.days].sort(), goal: d.goal || 1, unit: d.unit, times: [...d.times].sort(), reminder: d.reminder, before: d.before || 0, share: d.share !== false, color: d.color };
     if (F.h) { Object.assign(F.h, data); toast('Habit updated'); }
     else { D.habits.push({ id: uid(), ...data, start: today(), created: Date.now(), snooze: null, snoozeFrom: null, fame: false }); toast('Habit created. Now do it, idiot.'); }
     // Still inside the Save tap, so Android allows the notification prompt.
@@ -894,6 +1113,7 @@ function openFlow(mode, editId) {
       F.d.reminder = !F.d.reminder; a.classList.toggle('on', F.d.reminder); a.setAttribute('aria-checked', F.d.reminder); haptic(4);
       root.querySelector('#befs').hidden = !F.d.reminder; root.querySelector('#remnote').textContent = reminderNote(F.d);
     },
+    share: a => { F.d.share = F.d.share === false; a.classList.toggle('on', F.d.share); a.setAttribute('aria-checked', F.d.share); haptic(4); },
     before: a => {
       F.d.before = Number(a.dataset.v); haptic(3);
       root.querySelectorAll('#befs .tchip').forEach(b => { const on = Number(b.dataset.v) === F.d.before; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
@@ -1342,6 +1562,7 @@ function loadSample() {
 /* ---------- global events ---------- */
 const ACT = {
   tab: a => go(a.dataset.v),
+  duoInvite: () => duoInvite(), duoCopy: () => duoCopy(), duoJoin: () => duoJoin(), duoNudge: a => duoNudge(a), duoSettings: () => duoSettings(),
   day: a => { if (UI.day === a.dataset.v) return; UI.day = a.dataset.v; haptic(4); render({ still: true }); $('#view').scrollTop = 0; },
   plus: () => plusMenu(),
   newHabit: () => openFlow('new'),
@@ -1380,7 +1601,8 @@ if (window.visualViewport) {
   const vv = () => document.documentElement.style.setProperty('--vvh', window.visualViewport.height + 'px');
   window.visualViewport.addEventListener('resize', vv); vv();
 }
-document.addEventListener('visibilitychange', () => { if (document.hidden) return; if (FS.running) fTick(); schedSync(); });
+document.addEventListener('visibilitychange', () => { duoPoll(); if (document.hidden) return; if (FS.running) fTick(); schedSync(); schedShare(); });
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { if (e.data && ['home', 'progress', 'focus', 'duo'].includes(e.data.tab)) { while (layers.length) closeTop(); go(e.data.tab); } });
 schedSync(); // keeps the server current after an update or a new day
 setInterval(() => { if (UI.day > today() || (!layers.length && UI.tab === 'home' && $('.day.on') && $('.day.on span').textContent === 'Today' && UI.day !== today())) { UI.day = today(); render({ still: true }); } }, 60000);
 
@@ -1394,6 +1616,7 @@ if ('serviceWorker' in navigator && STANDALONE && /^https?:$/.test(location.prot
     else toast('Update ready. Reopen the app to get it.');
   });
 }
-if (['#focus', '#progress'].includes(location.hash)) UI.tab = location.hash.slice(1);
+if (['#focus', '#progress', '#duo'].includes(location.hash)) UI.tab = location.hash.slice(1);
+schedShare();
 
 render();

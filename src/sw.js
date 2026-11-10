@@ -55,7 +55,7 @@ self.addEventListener('push', e => {
     icon: './icons/icon-192.png',
     badge: './icons/badge-96.png',
     vibrate: [70, 50, 70],
-    data: { hid: d.hid || null },
+    data: { hid: d.hid || null, tab: d.tab || null },
   }));
 });
 
@@ -63,9 +63,10 @@ self.addEventListener('notificationclick', e => {
   e.notification.close();
   e.waitUntil((async () => {
     const scope = self.registration.scope;
+    const tab = e.notification.data && e.notification.data.tab;
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const w = wins.find(c => c.url.startsWith(scope));
-    if (w) return w.focus();
-    return self.clients.openWindow(scope);
+    if (w) { await w.focus(); if (tab) w.postMessage({ tab }); return; }
+    return self.clients.openWindow(scope + (tab ? '#' + tab : ''));
   })());
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createECDH, randomBytes } from 'node:crypto';
 import ece from 'http_ece';
 import { encrypt, vapidHeader, b64u } from '../src/webpush.js';
-import { dueNow, localNow } from '../src/index.js';
+import { dueNow, localNow } from '../src/schedule.js';
 
 test('payload decrypts with an independent aes128gcm implementation', async () => {
   const ua = createECDH('prime256v1'); ua.generateKeys();

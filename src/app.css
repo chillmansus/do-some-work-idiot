@@ -556,6 +556,40 @@ svg { flex: none; }
 .wheels.big li { font-size: 26px; }
 .colon { font: 600 28px var(--sans); color: var(--muted); }
 
+/* duo */
+.duo-blob { min-height: 300px; gap: 10px; }
+.duo-mark { width: 64px; height: 64px; border-radius: 22px; display: grid; place-items: center; color: var(--ink); margin-bottom: 6px; background: linear-gradient(155deg, #86ecfb, #f59be6); }
+.duo-h { margin: 0; font: 300 30px/1.12 var(--serif); text-wrap: balance; }
+.duo-note { margin: 0; color: var(--muted); max-width: 30ch; font-size: 14px; }
+.duo-note b { color: var(--text); }
+.duo-code {
+  border: 1px dashed var(--line-2); background: var(--surface-2); color: var(--text); border-radius: 18px; padding: 10px 20px;
+  font: 600 38px/1 var(--sans); letter-spacing: .08em; font-variant-numeric: tabular-nums; -webkit-user-select: text; user-select: text;
+}
+.duo-wait { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; color: var(--muted); font: 500 13px var(--sans); }
+.duo-wait i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: blink 1.4s ease-in-out infinite; }
+.duo-btns { width: min(100%, 340px); }
+.duo-input { text-align: center; font: 600 30px var(--sans); letter-spacing: .12em; text-transform: uppercase; height: 64px; }
+.duo-sum { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 18px var(--gr) 0 var(--gl); }
+.duo-tile {
+  min-width: 0; padding: 16px 16px 14px; border-radius: 26px; background: var(--surface); border: 1px solid var(--line);
+  animation: rise .45s var(--ease) both; animation-delay: calc(var(--i, 0) * 45ms);
+}
+.duo-sum.still .duo-tile { animation: none; }
+.duo-tile .eyebrow { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.duo-tile.all { border-color: color-mix(in srgb, var(--gold2) 55%, transparent); }
+.duo-num { margin: 8px 0 0; font: 300 54px/1 var(--serif); font-variant-numeric: tabular-nums; }
+.duo-num span { color: var(--faint); font-size: 30px; }
+.duo-lbl { margin: 4px 0 12px; color: var(--muted); font: 500 13px var(--sans); }
+.duo-tile.all .duo-lbl { color: var(--gold1); }
+.duo-sub { margin: 10px 0 0; color: var(--faint); font: 500 11px var(--sans); }
+.duo-act { padding-top: 14px; }
+.duo-act .btn:disabled { opacity: .45; }
+.dstreak { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); font: 600 13px var(--sans); font-variant-numeric: tabular-nums; }
+.dcheck { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid var(--line-2); display: grid; place-items: center; flex: none; }
+.dcheck.on { border: 0; background: linear-gradient(155deg, var(--c1), var(--c2)); color: var(--ink); }
+@keyframes blink { 50% { opacity: .25; } }
+
 /* clock-face time picker */
 .tpick { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 4px 0 18px; }
 .tcell {

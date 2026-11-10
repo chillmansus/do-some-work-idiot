@@ -1,54 +1,30 @@
-// Reminder server for Do Some Work Idiot.
-// The app sends each phone's push subscription, time zone and habit schedule to /sync.
-// A cron runs every minute and pushes a notification when a habit's reminder time comes up.
+// Server for Do Some Work Idiot: habit reminders (web push) and the two-person Duo mode.
+//
+// Storage (Workers KV, one small key per thing so two phones never overwrite each other):
+//   idx            list of device ids that have a push subscription (the cron walks this)
+//   dev:<id>       push subscription, time zone and reminder schedule of one phone
+//   auth:<id>      sha-256 of that phone's secret key (set on first contact, then required)
+//   share:<id>     what that phone shares with its partner: name and today's progress
+//   pair:<id>      who that phone is paired with
+//   code:<CODE>    one-time invite code -> inviter id (expires after 24 h)
+//   invite:<id>    the invite code currently open for that phone
+//   fail:<id>      wrong-code counter (stops guessing)
 import { sendPush } from './webpush.js';
+import { dueNow, message, TITLE } from './schedule.js';
 
-const KEY = 'devices';
-const MAX_DEVICES = 8;
+const MAX_DEVICES = 20;
 const BEFORE = [0, 5, 10, 15, 30, 60];
 const PUSH_HOSTS = ['fcm.googleapis.com', 'android.googleapis.com', 'push.services.mozilla.com', 'push.apple.com', 'notify.windows.com'];
-
-/* ---------- time ---------- */
-const WD = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-export function localNow(ms, tz) {
-  const p = {};
-  for (const x of new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short', hourCycle: 'h23',
-  }).formatToParts(new Date(ms))) p[x.type] = x.value;
-  return { date: `${p.year}-${p.month}-${p.day}`, min: (Number(p.hour) % 24) * 60 + Number(p.minute), dow: WD[p.weekday] };
-}
-const nextDay = ymd => new Date(Date.parse(ymd + 'T00:00:00Z') + 864e5).toISOString().slice(0, 10);
-const dowOf = ymd => new Date(ymd + 'T00:00:00Z').getUTCDay();
-const snoozed = (it, d) => !!it.snooze && d >= (it.snoozeFrom || '0000') && (it.snooze === 'forever' || d < it.snooze);
-
-// Every reminder that should fire in the local minute `now` for one device.
-export function dueNow(dev, ms) {
-  const now = localNow(ms, dev.tz);
-  const out = [];
-  for (const it of dev.items) {
-    for (const t of it.times) {
-      const [h, m] = t.split(':').map(Number);
-      let fire = h * 60 + m - (it.before || 0), day = now.date, dow = now.dow;
-      if (fire < 0) { fire += 1440; day = nextDay(now.date); dow = dowOf(day); } // reminder lands the evening before
-      if (fire !== now.min) continue;
-      if (!it.days.includes(dow) || day < it.start || snoozed(it, day)) continue;
-      if (dev.done && dev.done.date === day && dev.done.ids.includes(it.id)) continue;
-      out.push({ it, t, day });
-    }
-  }
-  return out;
-}
-
-export const TITLE = 'Your future self is sending this';
-function message(it, t) {
-  const who = it.identity ? ` Become ${it.identity}.` : '';
-  const body = it.before ? `${it.name}, in ${it.before} minutes at ${t}.${who}` : `${it.name}. It's time. Do some work, idiot.${who}`;
-  return { title: TITLE, body, tag: `h-${it.id}`, hid: it.id };
-}
+const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L
+const CODE_TTL = 24 * 3600;
+const MAX_FAILS = 10;
 
 /* ---------- input checks ---------- */
 const str = (v, n) => String(v ?? '').slice(0, n);
+const num = v => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
 const isDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+const ID_RE = /^[a-z0-9]{8,40}$/;
+const KEY_RE = /^[A-Za-z0-9_-]{22,64}$/;
 function cleanSub(s) {
   if (!s || typeof s.endpoint !== 'string' || !s.keys || typeof s.keys.p256dh !== 'string' || typeof s.keys.auth !== 'string') return null;
   let u; try { u = new URL(s.endpoint); } catch { return null; }
@@ -69,16 +45,185 @@ function cleanItems(list) {
     snoozeFrom: isDate(x.snoozeFrom) ? x.snoozeFrom : null,
   })).filter(x => x.id && x.times.length && x.days.length);
 }
-function validTz(tz) { try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; } }
+function cleanShare(b) {
+  const rows = Array.isArray(b.rows) ? b.rows.slice(0, 60).map(r => ({
+    id: str(r.id, 20), name: str(r.name, 80) || 'Habit', color: /^[a-z]{1,10}$/.test(r.color) ? r.color : 'ember', v: num(r.v), goal: num(r.goal) || 1, unit: str(r.unit, 20),
+    streak: Math.max(0, Math.min(99999, Math.floor(num(r.streak)))), done: !!r.done,
+  })).filter(r => r.id) : [];
+  return { name: str(b.name, 40).trim(), date: isDate(b.date) ? b.date : null, rows, prefs: { nudge: !(b.prefs && b.prefs.nudge === false), fin: !(b.prefs && b.prefs.fin === false) } };
+}
+const validTz = tz => { try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return typeof tz === 'string'; } catch { return false; } };
+const normCode = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const makeCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), x => CODE_CHARS[x % CODE_CHARS.length]).join('');
+async function sha256(s) {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)));
+  return Array.from(d, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/* ---------- storage ---------- */
+const kget = (env, k) => env.KV.get(k, 'json');
+const kput = (env, k, v, opts) => env.KV.put(k, JSON.stringify(v), opts);
+const kdel = (env, k) => env.KV.delete(k);
+
+// The first version kept every phone in one "devices" blob. Split it up once.
+async function loadIdx(env) {
+  const idx = await kget(env, 'idx');
+  if (idx) return idx;
+  const old = await kget(env, 'devices');
+  if (!old) return [];
+  const ids = Object.keys(old);
+  for (const id of ids) await kput(env, 'dev:' + id, old[id]);
+  await kput(env, 'idx', ids);
+  await kdel(env, 'devices');
+  return ids;
+}
+async function dropDevice(env, id) {
+  await kdel(env, 'dev:' + id);
+  const idx = await loadIdx(env);
+  if (idx.includes(id)) await kput(env, 'idx', idx.filter(x => x !== id));
+}
+
+// A phone proves who it is with a secret key it generated itself. The server keeps only a hash of it.
+// `hard` routes need the key; the old reminder routes accept a phone that has never sent one yet.
+async function authenticate(env, id, key, hard) {
+  const rec = await kget(env, 'auth:' + id);
+  if (!key) return !hard && !rec;
+  if (!KEY_RE.test(key)) return false;
+  const h = await sha256(key);
+  if (!rec) { await kput(env, 'auth:' + id, { h }); return true; }
+  return rec.h === h;
+}
+
+/* ---------- push helpers ---------- */
+async function notify(env, toId, payload, ttl = 3600) {
+  const dev = await kget(env, 'dev:' + toId);
+  if (!dev || !dev.sub) return false;
+  try {
+    const s = await sendPush(dev.sub, payload, env, { ttl, topic: str(payload.tag, 32).replace(/[^A-Za-z0-9_-]/g, '') || undefined });
+    if (s === 404 || s === 410) { await dropDevice(env, toId); return false; }
+    return s >= 200 && s < 300;
+  } catch (e) { console.log('push error', String(e)); return false; }
+}
+const nameOf = sh => (sh && sh.name) || 'Your partner';
+const allDone = sh => !!sh && sh.rows.length > 0 && sh.rows.every(r => r.done);
+
+/* ---------- routes ---------- */
+const ok = (data = {}) => [{ ok: true, ...data }, 200];
+const fail = (error, status = 400) => [{ error }, status];
+
+async function sync(env, id, b) {
+  const sub = cleanSub(b.sub);
+  if (!sub) return fail('bad subscription');
+  if (!validTz(b.tz)) return fail('bad time zone');
+  const done = b.done && isDate(b.done.date) && Array.isArray(b.done.ids) ? { date: b.done.date, ids: b.done.ids.slice(0, 100).map(x => str(x, 20)) } : null;
+  const idx = await loadIdx(env);
+  if (!idx.includes(id)) {
+    if (idx.length >= MAX_DEVICES) return fail('the reminder server is full', 429);
+    await kput(env, 'idx', [...idx, id]);
+  }
+  const dev = { sub, tz: b.tz, items: cleanItems(b.items), done, updated: Date.now() };
+  await kput(env, 'dev:' + id, dev);
+  return ok({ reminders: dev.items.reduce((n, it) => n + it.times.length, 0) });
+}
+async function test(env, id) {
+  const dev = await kget(env, 'dev:' + id);
+  if (!dev) return fail('this phone is not registered yet', 404);
+  const status = await sendPush(dev.sub, { title: TITLE, body: 'Reminders are on. This is what a nudge looks like. Now go do some work.', tag: 'test' }, env, { ttl: 300 });
+  if (status === 404 || status === 410) await dropDevice(env, id);
+  return [{ ok: status >= 200 && status < 300, status }, 200];
+}
+async function remove(env, id) { await dropDevice(env, id); return ok(); }
+
+async function share(env, id, b) {
+  const next = cleanShare(b);
+  if (!next.date) return fail('bad date');
+  const prev = await kget(env, 'share:' + id);
+  const same = prev && JSON.stringify({ n: prev.name, d: prev.date, r: prev.rows, p: prev.prefs }) === JSON.stringify({ n: next.name, d: next.date, r: next.rows, p: next.prefs });
+  if (!same) await kput(env, 'share:' + id, { ...next, updated: Date.now() });
+  const pr = await kget(env, 'pair:' + id);
+  if (!pr) return ok({ linked: false });
+  const wasDone = !!prev && prev.date === next.date && allDone(prev);
+  if (!same && allDone(next) && !wasDone) {
+    const theirs = await kget(env, 'share:' + pr.partner);
+    if (!theirs || theirs.prefs.fin) await notify(env, pr.partner, { title: `${nameOf(next)} finished everything today`, body: 'Your turn. Do some work, idiot.', tag: 'fin', tab: 'duo' });
+  }
+  return ok({ linked: true });
+}
+async function partner(env, id) {
+  const pr = await kget(env, 'pair:' + id);
+  if (!pr) return ok({ linked: false });
+  const [sh, dev] = await Promise.all([kget(env, 'share:' + pr.partner), kget(env, 'dev:' + pr.partner)]);
+  return ok({
+    linked: true,
+    name: nameOf(sh), date: sh ? sh.date : null, rows: sh ? sh.rows : [], updated: sh ? sh.updated : null,
+    canNudge: !!(dev && dev.sub) && (!sh || sh.prefs.nudge),
+    nudgeOff: !!sh && !sh.prefs.nudge, noPush: !(dev && dev.sub),
+  });
+}
+async function invite(env, id) {
+  if (await kget(env, 'pair:' + id)) return fail('you are already paired', 409);
+  const old = await kget(env, 'invite:' + id);
+  if (old && old.code) await kdel(env, 'code:' + old.code);
+  let code = makeCode();
+  for (let i = 0; i < 5 && await kget(env, 'code:' + code); i++) code = makeCode();
+  await kput(env, 'code:' + code, { id }, { expirationTtl: CODE_TTL });
+  await kput(env, 'invite:' + id, { code }, { expirationTtl: CODE_TTL });
+  return ok({ code, expiresIn: CODE_TTL });
+}
+async function join(env, id, b) {
+  const f = (await kget(env, 'fail:' + id)) || { n: 0 };
+  if (f.n >= MAX_FAILS) return fail('too many wrong codes, try again in an hour', 429);
+  const code = normCode(b.code);
+  const rec = /^[A-Z0-9]{6}$/.test(code) ? await kget(env, 'code:' + code) : null;
+  if (!rec) {
+    await kput(env, 'fail:' + id, { n: f.n + 1 }, { expirationTtl: 3600 });
+    return fail("That code doesn't work. It may have expired.", 404);
+  }
+  if (rec.id === id) return fail("That's your own code. Send it to your partner.");
+  if (await kget(env, 'pair:' + id)) return fail('you are already paired', 409);
+  if (await kget(env, 'pair:' + rec.id)) { await kdel(env, 'code:' + code); return fail('that person is already paired', 409); }
+  await Promise.all([kput(env, 'pair:' + id, { partner: rec.id }), kput(env, 'pair:' + rec.id, { partner: id })]);
+  await Promise.all([kdel(env, 'code:' + code), kdel(env, 'invite:' + rec.id), kdel(env, 'fail:' + id)]);
+  const who = str(b.name, 40).trim() || 'Your partner';
+  await notify(env, rec.id, { title: 'Duo connected', body: `${who} joined. Check how they're doing.`, tag: 'pair', tab: 'duo' });
+  return ok();
+}
+async function leave(env, id) {
+  const pr = await kget(env, 'pair:' + id);
+  const mine = await kget(env, 'share:' + id);
+  const inv = await kget(env, 'invite:' + id);
+  const jobs = [kdel(env, 'pair:' + id), kdel(env, 'share:' + id), kdel(env, 'invite:' + id)];
+  if (inv && inv.code) jobs.push(kdel(env, 'code:' + inv.code));
+  if (pr) jobs.push(kdel(env, 'pair:' + pr.partner), kdel(env, 'share:' + pr.partner));
+  await Promise.all(jobs);
+  if (pr) await notify(env, pr.partner, { title: 'Duo ended', body: `${nameOf(mine)} left. Your shared progress is gone from the server.`, tag: 'pair', tab: 'duo' });
+  return ok();
+}
+async function nudge(env, id) {
+  const pr = await kget(env, 'pair:' + id);
+  if (!pr) return fail('you are not paired', 409);
+  const [theirs, mine] = await Promise.all([kget(env, 'share:' + pr.partner), kget(env, 'share:' + id)]);
+  if (theirs && !theirs.prefs.nudge) return ok({ sent: false, reason: 'off' });
+  const dev = await kget(env, 'dev:' + pr.partner);
+  if (!dev || !dev.sub) return ok({ sent: false, reason: 'no-push' });
+  const sent = await notify(env, pr.partner, { title: `${nameOf(mine)} nudged you`, body: 'Do some work, idiot.', tag: 'nudge', tab: 'duo' });
+  return ok({ sent, reason: sent ? null : 'failed' });
+}
+
+const ROUTES = {
+  '/sync': { hard: false, run: sync }, '/test': { hard: false, run: test }, '/remove': { hard: false, run: remove },
+  '/share': { hard: true, run: share }, '/partner': { hard: true, run: partner },
+  '/invite': { hard: true, run: invite }, '/join': { hard: true, run: join },
+  '/leave': { hard: true, run: leave }, '/nudge': { hard: true, run: nudge },
+};
 
 /* ---------- http ---------- */
 function cors(req, env) {
   const origin = req.headers.get('Origin') || '';
-  const ok = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).includes(origin);
-  return ok ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400', Vary: 'Origin' } : { Vary: 'Origin' };
+  const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).includes(origin);
+  return allowed ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400', Vary: 'Origin' } : { Vary: 'Origin' };
 }
 const json = (data, status, headers) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', ...headers } });
-const loadAll = async env => (await env.KV.get(KEY, 'json')) || {};
 
 export default {
   async fetch(req, env) {
@@ -86,53 +231,42 @@ export default {
     const url = new URL(req.url);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
     if (req.method === 'GET' && url.pathname === '/') return json({ ok: true, service: 'dswi-reminders' }, 200, h);
-    if (req.method !== 'POST') return json({ error: 'not found' }, 404, h);
+    const route = ROUTES[url.pathname];
+    if (req.method !== 'POST' || !route) return json({ error: 'not found' }, 404, h);
     if (!h['Access-Control-Allow-Origin']) return json({ error: 'origin not allowed' }, 403, h);
 
-    let b; try { b = await req.json(); } catch { return json({ error: 'bad json' }, 400, h); }
-    const id = typeof b.id === 'string' && /^[a-z0-9]{8,40}$/.test(b.id) ? b.id : null;
+    const text = await req.text();
+    if (text.length > 60000) return json({ error: 'too big' }, 413, h);
+    let b; try { b = JSON.parse(text); } catch { return json({ error: 'bad json' }, 400, h); }
+    if (!b || typeof b !== 'object') return json({ error: 'bad json' }, 400, h);
+    const id = typeof b.id === 'string' && ID_RE.test(b.id) ? b.id : null;
     if (!id) return json({ error: 'bad id' }, 400, h);
-    const all = await loadAll(env);
+    if (!await authenticate(env, id, b.key, route.hard)) return json({ error: 'not allowed' }, 401, h);
 
-    if (url.pathname === '/sync') {
-      const sub = cleanSub(b.sub);
-      if (!sub) return json({ error: 'bad subscription' }, 400, h);
-      if (!validTz(b.tz)) return json({ error: 'bad time zone' }, 400, h);
-      const done = b.done && isDate(b.done.date) && Array.isArray(b.done.ids) ? { date: b.done.date, ids: b.done.ids.slice(0, 100).map(x => str(x, 20)) } : null;
-      all[id] = { sub, tz: b.tz, items: cleanItems(b.items), done, updated: Date.now() };
-      const ids = Object.keys(all).sort((a, c) => all[c].updated - all[a].updated);
-      for (const old of ids.slice(MAX_DEVICES)) delete all[old];
-      await env.KV.put(KEY, JSON.stringify(all));
-      return json({ ok: true, reminders: all[id].items.reduce((n, it) => n + it.times.length, 0) }, 200, h);
-    }
-    if (url.pathname === '/test') {
-      const dev = all[id];
-      if (!dev) return json({ error: 'this phone is not registered yet' }, 404, h);
-      const status = await sendPush(dev.sub, { title: TITLE, body: 'Reminders are on. This is what a nudge looks like. Now go do some work.', tag: 'test' }, env, { ttl: 300 });
-      if (status === 404 || status === 410) { delete all[id]; await env.KV.put(KEY, JSON.stringify(all)); }
-      return json({ ok: status >= 200 && status < 300, status }, 200, h);
-    }
-    if (url.pathname === '/remove') {
-      if (all[id]) { delete all[id]; await env.KV.put(KEY, JSON.stringify(all)); }
-      return json({ ok: true }, 200, h);
-    }
-    return json({ error: 'not found' }, 404, h);
+    const [data, status] = await route.run(env, id, b);
+    return json(data, status, h);
   },
 
-  async scheduled(event, env, ctx) {
-    const all = await loadAll(env);
-    let changed = false;
+  async scheduled(event, env) {
+    const idx = await loadIdx(env);
+    const devs = await Promise.all(idx.map(async id => [id, await kget(env, 'dev:' + id)]));
+    const gone = new Set();
     const jobs = [];
-    for (const [id, dev] of Object.entries(all)) {
+    for (const [id, dev] of devs) {
+      if (!dev) { gone.add(id); continue; }
       let due; try { due = dueNow(dev, event.scheduledTime); } catch { continue; }
       for (const { it, t } of due) {
         jobs.push(sendPush(dev.sub, message(it, t), env, { topic: `h${it.id}`.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) })
-          .then(s => { console.log('push', it.id, t, 'status', s); if (s === 404 || s === 410) { delete all[id]; changed = true; } })
+          .then(s => { console.log('push', it.id, t, 'status', s); if (s === 404 || s === 410) gone.add(id); })
           .catch(e => console.log('push error', String(e))));
       }
     }
     await Promise.all(jobs);
     if (jobs.length) console.log(`cron ${new Date(event.scheduledTime).toISOString()}: ${jobs.length} reminder(s) sent`);
-    if (changed) await env.KV.put(KEY, JSON.stringify(all));
+    if (gone.size) {
+      const cur = await loadIdx(env);
+      await kput(env, 'idx', cur.filter(x => !gone.has(x)));
+      await Promise.all([...gone].map(id => kdel(env, 'dev:' + id)));
+    }
   },
 };

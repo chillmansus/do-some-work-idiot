@@ -32,8 +32,12 @@ export function dueNow(dev, ms) {
   return out;
 }
 
-export function message(it, t) {
+export const LINE = 'Do some work, idiot.';
+// Each phone can set its own title and its own line (the part that says "Do some work, idiot.").
+export const titleOf = msg => (msg && msg.title) || TITLE;
+export const lineOf = msg => (msg && msg.line) || LINE;
+export function message(it, t, msg) {
   const who = it.identity ? ` Become ${it.identity}.` : '';
-  const body = it.before ? `${it.name}, in ${it.before} minutes at ${t}.${who}` : `${it.name}. It's time. Do some work, idiot.${who}`;
-  return { title: TITLE, body, tag: `h-${it.id}`, hid: it.id };
+  const body = it.before ? `${it.name}, in ${it.before} minutes at ${t}.${who}` : `${it.name}. It's time. ${lineOf(msg)}${who}`;
+  return { title: titleOf(msg), body, tag: `h-${it.id}`, hid: it.id };
 }

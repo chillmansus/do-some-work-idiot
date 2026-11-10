@@ -165,6 +165,7 @@ async function syncPush(force = false) {
       v: 2, id: devId(), sub: sub.toJSON(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       items: remindable().map(h => ({ id: h.id, name: h.name, identity: h.identity, days: h.days, times: h.times, before: h.before || 0, start: h.start, snooze: h.snooze, snoozeFrom: h.snoozeFrom })),
       done: { date: t, ids: live().filter(h => isDone(h, t)).map(h => h.id) },
+      msg: D.msg && (D.msg.title || D.msg.line) ? { title: D.msg.title || '', line: D.msg.line || '' } : null,
     };
     const s = JSON.stringify(body);
     if (!force && lsGet(PK.last) === s) return null;
@@ -1548,6 +1549,8 @@ function profileSheet() {
       ${themesHTML()}
       <p class="sec-label">Reminders</p>
       <div id="remsec">${remindersHTML()}</div>
+      <p class="sec-label">Notification text</p>
+      <div id="msgsec">${msgHTML()}</div>
       <p class="sec-label">Backup</p>
       <p class="muted" style="margin:0 0 12px">Your habits and history live on this phone. With reminders on, the reminder server keeps only names, times and what's done today. Copy a backup now and then and keep it somewhere safe.</p>
       <div class="stackbtns">
@@ -1564,6 +1567,12 @@ function profileSheet() {
     onClose: () => render({ still: true }),
     mount: L => {
       L.el.querySelector('#pname').addEventListener('input', e => { D.name = e.target.value.slice(0, 40); save(); });
+      const upd = () => {
+        D.msg = { title: L.el.querySelector('#mtitle').value.slice(0, 60), line: L.el.querySelector('#mline').value.slice(0, 120) };
+        save(); paintMsgPreview(L.el);
+      };
+      L.el.querySelector('#mtitle').addEventListener('input', upd);
+      L.el.querySelector('#mline').addEventListener('input', upd);
       const rf = L.el.querySelector('#rfile');
       if (rf) rf.addEventListener('change', () => {
         const f = rf.files && rf.files[0]; if (!f) return;
@@ -1576,6 +1585,8 @@ function profileSheet() {
       pushOn: async (a, e, L) => { a.disabled = true; await enablePush(); const s = L.el.querySelector('#remsec'); if (s) s.innerHTML = remindersHTML(); },
       pushOff: async (a, e, L) => { a.disabled = true; await disablePush(); const s = L.el.querySelector('#remsec'); if (s) s.innerHTML = remindersHTML(); },
       pushTest: async a => { a.disabled = true; await testPush(); a.disabled = false; },
+      msgPick: (a, e, L) => { const f = L.el.querySelector('#mline'); f.value = a.dataset.v; f.dispatchEvent(new Event('input')); haptic(4); },
+      msgReset: (a, e, L) => { D.msg = null; save(); L.el.querySelector('#msgsec').innerHTML = msgHTML(); haptic(4); toast('Back to the original words'); },
       theme: (a, e, L) => {
         FX.setTheme(a.dataset.v); haptic(6);
         L.el.querySelectorAll('.theme').forEach(b => { const on = b === a; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
@@ -1604,6 +1615,23 @@ function profileSheet() {
       },
     },
   });
+}
+const MSG_TITLE = 'Your future self is sending this', MSG_LINE = 'Do some work, idiot.';
+const MSG_IDEAS = ['Do some work, idiot.', "You've got this.", 'Small steps. Go.', 'Future you says thanks.', 'No excuses today.', 'Cố lên nào!'];
+function msgPreview() {
+  const h = remindable()[0] || live()[0], m = D.msg || {};
+  const name = h ? h.name : 'Read 5 pages', who = h && h.identity ? ` Become ${h.identity}.` : '';
+  return `<b>${esc(m.title || MSG_TITLE)}</b><span>${esc(`${name}. It's time. ${m.line || MSG_LINE}${who}`)}</span>`;
+}
+function paintMsgPreview(root) { const p = root.querySelector('#mprev'); if (p) p.innerHTML = msgPreview(); }
+function msgHTML() {
+  const m = D.msg || {};
+  return `<p class="muted" style="margin:0 0 12px">Your reminders, nudges and alerts use these words on this phone. Your partners set their own.</p>
+    <input class="field" id="mtitle" maxlength="60" placeholder="${MSG_TITLE}" value="${esc(m.title || '')}" aria-label="Notification title">
+    <input class="field" id="mline" maxlength="120" placeholder="${MSG_LINE}" value="${esc(m.line || '')}" aria-label="Notification message" style="margin-top:10px">
+    <div class="times" style="margin-top:10px">${MSG_IDEAS.map(x => `<button class="tchip" data-a="msgPick" data-v="${esc(x)}">${esc(x)}</button>`).join('')}</div>
+    <div class="npreview" id="mprev" aria-label="Preview">${msgPreview()}</div>
+    ${m.title || m.line ? `<button class="link" data-a="msgReset" style="margin-top:6px">Use the original words</button>` : ''}`;
 }
 function themesHTML() {
   if (!window.FX) return '';

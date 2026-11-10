@@ -10,7 +10,7 @@
 //   invite:<id>    the invite code currently open for that phone
 //   fail:<id>      wrong-code counter (stops guessing)
 import { sendPush } from './webpush.js';
-import { dueNow, message, TITLE } from './schedule.js';
+import { dueNow, message, titleOf, lineOf } from './schedule.js';
 
 const MAX_DEVICES = 20;
 const BEFORE = [0, 5, 10, 15, 30, 60];
@@ -52,6 +52,12 @@ function cleanShare(b) {
     streak: Math.max(0, Math.min(99999, Math.floor(num(r.streak)))), done: !!r.done,
   })).filter(r => r.id) : [];
   return { name: str(b.name, 40).trim(), date: isDate(b.date) ? b.date : null, rows, prefs: { nudge: !(b.prefs && b.prefs.nudge === false), fin: !(b.prefs && b.prefs.fin === false) } };
+}
+function cleanMsg(m) {
+  if (!m || typeof m !== 'object') return null;
+  const one = v => str(v, 200).replace(/\s+/g, ' ').trim();
+  const title = one(m.title).slice(0, 60), line = one(m.line).slice(0, 120);
+  return title || line ? { title, line } : null;
 }
 const validTz = tz => { try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return typeof tz === 'string'; } catch { return false; } };
 const normCode = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -96,9 +102,11 @@ async function authenticate(env, id, key, hard) {
 }
 
 /* ---------- push helpers ---------- */
+// payload may be a function of the receiving phone's record, so it can use that phone's own wording
 async function notify(env, toId, payload, ttl = 3600) {
   const dev = await kget(env, 'dev:' + toId);
   if (!dev || !dev.sub) return false;
+  if (typeof payload === 'function') payload = payload(dev);
   try {
     const s = await sendPush(dev.sub, payload, env, { ttl, topic: str(payload.tag, 32).replace(/[^A-Za-z0-9_-]/g, '') || undefined });
     if (s === 404 || s === 410) { await dropDevice(env, toId); return false; }
@@ -122,14 +130,14 @@ async function sync(env, id, b) {
     if (idx.length >= MAX_DEVICES) return fail('the reminder server is full', 429);
     await kput(env, 'idx', [...idx, id]);
   }
-  const dev = { sub, tz: b.tz, items: cleanItems(b.items), done, updated: Date.now() };
+  const dev = { sub, tz: b.tz, items: cleanItems(b.items), done, msg: cleanMsg(b.msg), updated: Date.now() };
   await kput(env, 'dev:' + id, dev);
   return ok({ reminders: dev.items.reduce((n, it) => n + it.times.length, 0) });
 }
 async function test(env, id) {
   const dev = await kget(env, 'dev:' + id);
   if (!dev) return fail('this phone is not registered yet', 404);
-  const status = await sendPush(dev.sub, { title: TITLE, body: 'Reminders are on. This is what a nudge looks like. Now go do some work.', tag: 'test' }, env, { ttl: 300 });
+  const status = await sendPush(dev.sub, { title: titleOf(dev.msg), body: `Reminders are on. This is what a reminder looks like. ${lineOf(dev.msg)}`, tag: 'test' }, env, { ttl: 300 });
   if (status === 404 || status === 410) await dropDevice(env, id);
   return [{ ok: status >= 200 && status < 300, status }, 200];
 }
@@ -165,7 +173,7 @@ async function share(env, id, b) {
   if (!same && allDone(next) && !wasDone) {
     await Promise.all(list.map(async p => {
       const theirs = await kget(env, 'share:' + p);
-      if (!theirs || theirs.prefs.fin) await notify(env, p, { title: `${nameOf(next)} finished everything today`, body: 'Your turn. Do some work, idiot.', tag: 'fin', tab: 'duo' });
+      if (!theirs || theirs.prefs.fin) await notify(env, p, d => ({ title: `${nameOf(next)} finished everything today`, body: `Your turn. ${lineOf(d.msg)}`, tag: 'fin', tab: 'duo' }));
     }));
   }
   return ok({ linked: true });
@@ -250,7 +258,7 @@ async function nudge(env, id, b) {
   if (theirs && !theirs.prefs.nudge) return ok({ sent: false, reason: 'off' });
   const dev = await kget(env, 'dev:' + p);
   if (!dev || !dev.sub) return ok({ sent: false, reason: 'no-push' });
-  const sent = await notify(env, p, { title: `${nameOf(mine)} nudged you`, body: 'Do some work, idiot.', tag: 'nudge', tab: 'duo' });
+  const sent = await notify(env, p, d => ({ title: `${nameOf(mine)} nudged you`, body: lineOf(d.msg), tag: 'nudge', tab: 'duo' }));
   return ok({ sent, reason: sent ? null : 'failed' });
 }
 
@@ -300,7 +308,7 @@ export default {
       if (!dev) { gone.add(id); continue; }
       let due; try { due = dueNow(dev, event.scheduledTime); } catch { continue; }
       for (const { it, t } of due) {
-        jobs.push(sendPush(dev.sub, message(it, t), env, { topic: `h${it.id}`.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) })
+        jobs.push(sendPush(dev.sub, message(it, t, dev.msg), env, { topic: `h${it.id}`.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) })
           .then(s => { console.log('push', it.id, t, 'status', s); if (s === 404 || s === 410) gone.add(id); })
           .catch(e => console.log('push error', String(e))));
       }

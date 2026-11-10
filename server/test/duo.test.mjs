@@ -219,6 +219,28 @@ test('the old single-blob data is migrated and the cron still sends reminders', 
   assert.equal(pushes.length, 1);
 });
 
+test('each phone gets notifications in its own words', async () => {
+  const { env, pushes, a, b } = await paired();
+  // the receiver (b) sets its own title and line; a has none
+  await call(env, '/sync', as(b, { sub: b.sub, tz: 'Asia/Ho_Chi_Minh', items: [{ id: 'h1', name: 'Read', days: [0, 1, 2, 3, 4, 5, 6], times: ['07:30'], start: '2026-01-01' }], done: null,
+    msg: { title: '  Hey   Minh ', line: 'Cố lên nào!' } }));
+  assert.deepEqual(JSON.parse(env.KV.m.get('dev:' + b.id)).msg, { title: 'Hey Minh', line: 'Cố lên nào!' });
+  const bodies = [];
+  globalThis.fetch = async (url, init) => { pushes.push({ id: String(url).split('/').pop() }); bodies.push(init); return new Response(null, { status: 201 }); };
+  await call(env, '/nudge', as(a));
+  assert.equal(pushes.at(-1).id, b.id);
+  await worker.scheduled({ scheduledTime: Date.parse('2026-11-09T00:30:00Z') }, env);
+  assert.equal(pushes.at(-1).id, b.id);
+  // payloads are encrypted, so check the wording through the message builder directly
+  const { message, lineOf, titleOf } = await import('../src/schedule.js');
+  const m = message({ id: 'h1', name: 'Read', identity: 'a reader', before: 0 }, '07:30', { title: 'Hey Minh', line: 'Cố lên nào!' });
+  assert.deepEqual([m.title, m.body], ['Hey Minh', "Read. It's time. Cố lên nào! Become a reader."]);
+  assert.deepEqual([titleOf(null), lineOf({ title: 'x', line: '' })], ['Your future self is sending this', 'Do some work, idiot.']);
+  // clearing both falls back to the defaults
+  await call(env, '/sync', as(b, { sub: b.sub, tz: 'Asia/Ho_Chi_Minh', items: [], done: null, msg: { title: ' ', line: '' } }));
+  assert.equal(JSON.parse(env.KV.m.get('dev:' + b.id)).msg, null);
+});
+
 test('a phone that never sent a key is let in once, then must keep using it', async () => {
   const { env } = await setup();
   const p = phone();

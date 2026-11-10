@@ -16,6 +16,12 @@
     { id: 'snow', name: 'Snow', fx: 'snow', bg: '#090b0f', glow: '#1c2636', s: ['#13161c', '#1a1e26', '#252a34'], tint: '228,238,255', sw: ['#ffffff', '#9cc0ff'], note: 'Snowfall' },
     { id: 'crimson', name: 'Lantern', fx: 'lanterns', bg: '#0e0607', glow: '#300c12', s: ['#1a1012', '#23171a', '#312024'], tint: '255,208,205', sw: ['#ffb36b', '#e8455a'], note: 'Floating lanterns' },
     { id: 'dune', name: 'Dune', fx: 'sand', bg: '#0d0a07', glow: '#2b1e10', s: ['#18130e', '#211b14', '#2e261d'], tint: '245,226,198', sw: ['#f4e3c3', '#c9874a'], note: 'Desert wind' },
+    { id: 'dawn', name: 'Dawn', fx: 'dawn', bg: '#0a0a12', glow: '#2c1c30', s: ['#15141c', '#1d1b25', '#292633'], tint: '255,222,220', sw: ['#ffd9a8', '#c77dba'], note: 'Sunrise and birds' },
+    { id: 'golden', name: 'Golden hour', fx: 'golden', bg: '#0d0a05', glow: '#33230a', s: ['#18140d', '#211b12', '#2e261a'], tint: '255,232,190', sw: ['#ffe39a', '#f0a92b'], note: 'Sun rays, drifting seeds' },
+    { id: 'sunset', name: 'Sunset', fx: 'sunset', bg: '#0e0807', glow: '#3b170c', s: ['#1a110e', '#241814', '#33221c'], tint: '255,210,185', sw: ['#ffb35e', '#e8455a'], note: 'Sun over the sea' },
+    { id: 'twilight', name: 'Twilight', fx: 'twilight', bg: '#08081a', glow: '#261b42', s: ['#12121f', '#191829', '#232238'], tint: '222,214,255', sw: ['#f0a3c8', '#5b4fd6'], note: 'Moon and mountains' },
+    { id: 'moonlight', name: 'Moonlight', fx: 'moonlight', bg: '#05080d', glow: '#15212f', s: ['#0f141b', '#151b24', '#1f2733'], tint: '215,228,250', sw: ['#eef3ff', '#5f7fb0'], note: 'Clouds past the moon' },
+    { id: 'storm', name: 'Storm', fx: 'storm', bg: '#07090c', glow: '#1a2230', s: ['#111419', '#181c22', '#22272f'], tint: '210,220,238', sw: ['#d6e2ff', '#3d4a63'], note: 'Rain and lightning' },
   ];
   const TK = { theme: 'dswi.theme', motion: 'dswi.fx' };
   const get = k => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -304,7 +310,181 @@
         }
       },
     },
+    dawn: {
+      make: (W, H) => ({ birds: Array.from({ length: 5 }, () => bird(W, H, true)), mist: [0, 1, 2].map(i => ({ x: R(0, W), y: H * (.6 + i * .08), w: R(160, 260), v: R(4, 10) })) }),
+      draw(ctx, s, t, dt, W, H) {
+        sky(ctx, s, H, W, [[0, 'rgba(40,50,120,0)'], [.5, 'rgba(120,80,150,.16)'], [.82, 'rgba(255,150,130,.30)'], [1, 'rgba(255,200,140,.40)']]);
+        const sy = H * .84 - Math.sin(t * .05) * 8;
+        ctx.globalCompositeOperation = 'lighter';
+        stamp(ctx, glow('rgba(255,190,140,1)', 120), W * .62, sy, .45, 1.6);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = .7; ctx.fillStyle = '#ffe2b8'; ctx.beginPath(); ctx.arc(W * .62, sy, 26, 0, TAU); ctx.fill(); ctx.globalAlpha = 1;
+        hills(ctx, W, H, 70, 26, .006, '#2a1a33', .85, t * 0); hills(ctx, W, H, 34, 14, .011, '#1a1222', .95, 2);
+        for (const m of s.mist) { m.x += m.v * dt; if (m.x - m.w > W) m.x = -m.w; stamp(ctx, glow('rgba(255,215,220,1)', 60), m.x, m.y, .1, m.w / 60); }
+        flock(ctx, s.birds, t, dt, W, H, '#2a1830');
+      },
+    },
+    sunset: {
+      make: (W, H) => ({ birds: Array.from({ length: 4 }, () => bird(W, H, true)), cl: Array.from({ length: 4 }, (_, i) => ({ x: R(0, W), y: H * (.45 + i * .07), w: R(90, 170), v: R(3, 8) })), sh: Array.from({ length: 26 }, () => ({ dy: R(6, H * .16), w: R(10, 40), ph: R(0, TAU), dx: R(-1, 1) })) }),
+      draw(ctx, s, t, dt, W, H) {
+        const hz = H * .8;
+        sky(ctx, s, H, W, [[0, 'rgba(60,20,60,0)'], [.45, 'rgba(160,50,70,.18)'], [.78, 'rgba(255,110,50,.38)'], [.8, 'rgba(60,20,40,.35)'], [1, 'rgba(20,8,20,.5)']]);
+        for (const c of s.cl) {
+          c.x += c.v * dt; if (c.x - c.w > W) c.x = -c.w;
+          ctx.globalAlpha = .16; ctx.fillStyle = '#ff9a7a'; ctx.beginPath(); ctx.ellipse(c.x, c.y, c.w, 8, 0, 0, TAU); ctx.fill();
+        }
+        ctx.globalCompositeOperation = 'lighter';
+        stamp(ctx, glow('rgba(255,120,50,1)', 140), W * .5, hz, .55, 1.6);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, hz); ctx.clip();
+        ctx.globalAlpha = .8; ctx.fillStyle = '#ffb35e'; ctx.beginPath(); ctx.arc(W * .5, hz + 6, 38, 0, TAU); ctx.fill(); ctx.restore();
+        ctx.strokeStyle = '#ffc07a'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+        for (const r of s.sh) {
+          const k = r.dy / (H * .16), w = r.w * (1 - k * .6), x = W * .5 + r.dx * 30 * k + Math.sin(t * 1.3 + r.ph) * 6;
+          ctx.globalAlpha = (.55 - k * .45) * (.6 + .4 * Math.sin(t * 2.2 + r.ph));
+          ctx.beginPath(); ctx.moveTo(x - w / 2, hz + r.dy); ctx.lineTo(x + w / 2, hz + r.dy); ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        flock(ctx, s.birds, t, dt, W, H * .7, '#24101a');
+      },
+    },
+    twilight: {
+      make: (W, H) => ({ st: Array.from({ length: 70 }, () => ({ x: R(0, W), y: R(0, H * .7), r: R(.4, 1.5), ph: R(0, TAU), sp: R(.4, 1.6) })), cl: Array.from({ length: 3 }, (_, i) => ({ x: R(0, W), y: H * (.4 + i * .09), w: R(100, 180), v: R(2, 6) })) }),
+      draw(ctx, s, t, dt, W, H) {
+        sky(ctx, s, H, W, [[0, 'rgba(30,30,90,0)'], [.5, 'rgba(70,50,140,.18)'], [.85, 'rgba(210,110,160,.28)'], [1, 'rgba(255,160,150,.32)']]);
+        ctx.fillStyle = '#fff';
+        for (const p of s.st) { ctx.globalAlpha = (.15 + .55 * (.5 + .5 * Math.sin(t * p.sp + p.ph))) * (1 - p.y / (H * .8)); ctx.fillRect(p.x, p.y, p.r, p.r); }
+        ctx.globalAlpha = 1;
+        const mx = W * .8, my = H * .2;
+        ctx.globalCompositeOperation = 'lighter'; stamp(ctx, glow('rgba(220,210,255,1)', 60), mx, my, .35, 1.4); ctx.globalCompositeOperation = 'source-over';
+        ctx.drawImage(crescent(), mx - 24, my - 24);
+        for (const c of s.cl) { c.x += c.v * dt; if (c.x - c.w > W) c.x = -c.w; ctx.globalAlpha = .1; ctx.fillStyle = '#c99ad6'; ctx.beginPath(); ctx.ellipse(c.x, c.y, c.w, 7, 0, 0, TAU); ctx.fill(); }
+        ctx.globalAlpha = 1;
+        mountains(ctx, W, H, 150, '#1c1638', .9, 7); mountains(ctx, W, H, 95, '#130f26', .95, 3);
+      },
+    },
+    moonlight: {
+      make: (W, H) => ({ st: Array.from({ length: 50 }, () => ({ x: R(0, W), y: R(0, H * .75), r: R(.4, 1.3), ph: R(0, TAU) })), cl: Array.from({ length: 5 }, () => cloud(W, H, true)), sh: Array.from({ length: 22 }, () => ({ dy: R(6, H * .14), w: R(8, 30), ph: R(0, TAU) })) }),
+      draw(ctx, s, t, dt, W, H) {
+        const hz = H * .82, mx = W * .8, my = H * .2;
+        sky(ctx, s, H, W, [[0, 'rgba(20,40,70,0)'], [.6, 'rgba(40,70,110,.16)'], [.82, 'rgba(80,110,150,.22)'], [.83, 'rgba(10,20,35,.45)'], [1, 'rgba(5,10,20,.55)']]);
+        ctx.fillStyle = '#fff';
+        for (const p of s.st) { ctx.globalAlpha = .2 + .3 * Math.sin(t * .8 + p.ph); ctx.fillRect(p.x, p.y, p.r, p.r); }
+        ctx.globalCompositeOperation = 'lighter'; stamp(ctx, glow('rgba(200,220,255,1)', 90), mx, my, .4, 1.6); ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = .95; ctx.fillStyle = '#eef3ff'; ctx.beginPath(); ctx.arc(mx, my, 28, 0, TAU); ctx.fill();
+        ctx.globalAlpha = .12; ctx.fillStyle = '#7d8aa6'; [[-8, -6, 7], [9, 5, 5], [-2, 11, 4]].forEach(([a, b, r]) => { ctx.beginPath(); ctx.arc(mx + a, my + b, r, 0, TAU); ctx.fill(); });
+        for (const c of s.cl) {
+          c.x += c.v * dt; if (c.x - c.w * 1.5 > W) Object.assign(c, cloud(W, H));
+          for (const [ox, oy, r] of c.parts) stamp(ctx, glow('rgba(120,135,165,1)', 40), c.x + ox, c.y + oy, .28, r / 40);
+        }
+        ctx.strokeStyle = '#dfe8ff'; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+        for (const r of s.sh) {
+          const k = r.dy / (H * .14), w = r.w * (1 - k * .5), x = mx + Math.sin(t * 1.1 + r.ph) * 5;
+          ctx.globalAlpha = (.5 - k * .4) * (.5 + .5 * Math.sin(t * 1.8 + r.ph));
+          ctx.beginPath(); ctx.moveTo(x - w / 2, hz + r.dy); ctx.lineTo(x + w / 2, hz + r.dy); ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      },
+    },
+    golden: {
+      make: (W, H) => ({ seeds: Array.from({ length: 16 }, () => seed(W, H, true)), motes: Array.from({ length: 24 }, () => ({ x: R(0, W), y: R(0, H), ph: R(0, TAU), v: R(3, 9) })) }),
+      draw(ctx, s, t, dt, W, H) {
+        sky(ctx, s, H, W, [[0, 'rgba(255,200,90,.10)'], [.5, 'rgba(230,150,60,.12)'], [1, 'rgba(255,190,90,.26)']]);
+        ctx.globalCompositeOperation = 'lighter';
+        stamp(ctx, glow('rgba(255,210,120,1)', 140), W * .92, H * .1, .5, 1.6);
+        for (let i = 0; i < 5; i++) {
+          const a = .05 + .035 * Math.sin(t * .4 + i * 1.9), x0 = W * .95, y0 = H * .08, ang = 2.05 + i * .13 + Math.sin(t * .1 + i) * .02;
+          const g = ctx.createLinearGradient(x0, y0, x0 + Math.cos(ang) * H, y0 + Math.sin(ang) * H);
+          g.addColorStop(0, `rgba(255,220,140,${a})`); g.addColorStop(1, 'rgba(255,220,140,0)');
+          ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(x0, y0);
+          ctx.lineTo(x0 + Math.cos(ang - .035) * H * 1.2, y0 + Math.sin(ang - .035) * H * 1.2); ctx.lineTo(x0 + Math.cos(ang + .035) * H * 1.2, y0 + Math.sin(ang + .035) * H * 1.2); ctx.fill();
+        }
+        const m = glow('rgba(255,225,150,1)', 5);
+        for (const p of s.motes) { p.y -= p.v * dt; p.x += Math.sin(t * .5 + p.ph) * 5 * dt; if (p.y < -10) { p.y = H + 10; p.x = R(0, W); } stamp(ctx, m, p.x, p.y, .3 + .3 * Math.sin(t * 1.5 + p.ph)); }
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.strokeStyle = 'rgba(255,245,225,.75)'; ctx.lineWidth = .8;
+        for (const p of s.seeds) {
+          p.x += (p.v + Math.sin(t * .6 + p.ph) * 8) * dt; p.y += (Math.sin(t * .9 + p.ph) * 10 - 3) * dt; p.rot += Math.sin(t + p.ph) * .3 * dt;
+          if (p.x > W + 20 || p.y < -20) Object.assign(p, seed(W, H));
+          ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.globalAlpha = .8;
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, p.s * 1.3);
+          for (let k = 0; k < 9; k++) { const a = -Math.PI / 2 + (k - 4) * .32; ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * p.s, Math.sin(a) * p.s); }
+          ctx.stroke(); ctx.restore();
+        }
+        ctx.globalAlpha = 1;
+      },
+    },
+    storm: {
+      make: (W, H) => ({ cl: Array.from({ length: 7 }, (_, i) => ({ x: (i / 6) * W + R(-30, 30), y: R(H * .1, H * .24), r: R(50, 90), v: R(4, 9) })), d: Array.from({ length: 80 }, () => ({ x: R(-60, W), y: R(0, H), v: R(560, 820), l: R(14, 26) })), flash: 0, bolt: null, next: R(3, 6) }),
+      draw(ctx, s, t, dt, W, H) {
+        sky(ctx, s, H, W, [[0, 'rgba(40,50,70,.35)'], [.4, 'rgba(30,38,55,.15)'], [1, 'rgba(20,25,35,.25)']]);
+        s.next -= dt;
+        if (s.next <= 0) {
+          s.next = R(5, 11); s.flash = 1;
+          let x = R(W * .15, W * .85), y = H * .18; const pts = [[x, y]];
+          while (y < H * R(.55, .8)) { x += R(-26, 26); y += R(18, 40); pts.push([x, y]); }
+          s.bolt = pts;
+        }
+        if (s.flash > 0) {
+          ctx.fillStyle = `rgba(200,215,255,${.16 * s.flash})`; ctx.fillRect(0, 0, W, H);
+          if (s.bolt && s.flash > .55) {
+            ctx.strokeStyle = `rgba(235,240,255,${s.flash})`; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+            ctx.beginPath(); s.bolt.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke();
+          }
+          s.flash = Math.max(0, s.flash - dt * (s.flash > .55 ? 2.2 : 1.4));
+        }
+        const dark = glow('rgba(60,70,90,1)', 60);
+        for (const c of s.cl) { c.x += c.v * dt; if (c.x - c.r > W) c.x = -c.r; stamp(ctx, dark, c.x, c.y, .75 + .25 * s.flash, c.r / 40); }
+        ctx.strokeStyle = 'rgba(180,200,230,.3)'; ctx.lineWidth = 1; ctx.beginPath();
+        for (const d of s.d) {
+          d.y += d.v * dt; d.x += d.v * .25 * dt;
+          if (d.y > H) { d.y = R(-40, 0); d.x = R(-80, W); }
+          ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - d.l * .25, d.y - d.l);
+        }
+        ctx.stroke();
+      },
+    },
   };
+  // sky scenes: a tall gradient (cached per state), hills, mountains, birds, clouds, a crescent moon
+  function sky(ctx, s, H, W, stops) {
+    if (!s.sky) { const g = ctx.createLinearGradient(0, 0, 0, H); for (const [o, c] of stops) g.addColorStop(o, c); s.sky = g; }
+    ctx.fillStyle = s.sky; ctx.fillRect(0, 0, W, H);
+  }
+  function hills(ctx, W, H, base, amp, k, color, a, ph) {
+    ctx.globalAlpha = a; ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(0, H);
+    for (let x = 0; x <= W + 20; x += 20) ctx.lineTo(x, H - base - Math.sin(x * k + ph) * amp - Math.sin(x * k * 2.7 + ph * 2) * amp * .3);
+    ctx.lineTo(W, H); ctx.fill(); ctx.globalAlpha = 1;
+  }
+  function mountains(ctx, W, H, base, color, a, seed) {
+    ctx.globalAlpha = a; ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(0, H);
+    for (let x = 0; x <= W + 24; x += 24) {
+      const n = Math.sin(x * .013 + seed) * .6 + Math.sin(x * .031 + seed * 2) * .3 + Math.abs(Math.sin(x * .007 + seed)) * .7;
+      ctx.lineTo(x, H - base - n * 46);
+    }
+    ctx.lineTo(W, H); ctx.fill(); ctx.globalAlpha = 1;
+  }
+  function bird(W, H, any) { const dir = Math.random() < .5 ? 1 : -1; return { dir, x: any ? R(0, W) : dir > 0 ? -30 : W + 30, y: R(H * .25, H * .62), v: R(16, 30), s: R(5, 9), f: R(5, 8), ph: R(0, TAU) }; }
+  function flock(ctx, birds, t, dt, W, H, color) {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.globalAlpha = .85;
+    for (const b of birds) {
+      b.x += b.v * b.dir * dt; b.y += Math.sin(t * .7 + b.ph) * 4 * dt;
+      if ((b.dir > 0 && b.x > W + 40) || (b.dir < 0 && b.x < -40)) Object.assign(b, bird(W, H));
+      const w = Math.sin(t * b.f + b.ph) * b.s * .55;
+      ctx.beginPath(); ctx.moveTo(b.x - b.s, b.y - w); ctx.quadraticCurveTo(b.x - b.s * .4, b.y - w * .3 - 1, b.x, b.y);
+      ctx.quadraticCurveTo(b.x + b.s * .4, b.y - w * .3 - 1, b.x + b.s, b.y - w); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+  function cloud(W, H, any) { const w = R(50, 110); return { x: any ? R(-w, W) : -w * 1.5, y: R(H * .15, H * .5), w, v: R(5, 11), parts: Array.from({ length: 4 }, (_, i) => [(i - 1.5) * w * .4, R(-8, 8), R(w * .35, w * .55)]) }; }
+  let moonSpr = null;
+  function crescent() {
+    if (moonSpr) return moonSpr;
+    const c = document.createElement('canvas'); c.width = c.height = 48; const g = c.getContext('2d');
+    g.fillStyle = '#f3efff'; g.beginPath(); g.arc(24, 24, 20, 0, TAU); g.fill();
+    g.globalCompositeOperation = 'destination-out'; g.beginPath(); g.arc(33, 18, 18, 0, TAU); g.fill();
+    return (moonSpr = c);
+  }
+  function seed(W, H, any) { return { x: any ? R(0, W) : -20, y: R(H * .2, H * .95), v: R(14, 30), s: R(4, 7), ph: R(0, TAU), rot: R(-.5, .5) }; }
   function spark(W, H, any) { const m = R(2.5, 6); return { x: R(0, W), y: any ? R(H * .2, H) : H + R(0, 30), vx: R(-6, 6), vy: R(-55, -22), r: R(.35, .9), f: R(1, 3), ph: R(0, TAU), life: any ? R(0, m) : m, max: m }; }
   function leaf(W, H, any) { return { x: R(-20, W), y: any ? R(-20, H) : R(-60, -20), s: R(7, 14), vy: R(18, 38), a: R(20, 50), f: R(.6, 1.4), ph: R(0, TAU), rot: R(0, TAU), vr: R(-1.2, 1.2), c: pick(['#6fbf55', '#9fd65a', '#3f9e4f', '#c9d65a', '#d9a441']) }; }
   function petal(W, H, any) { return { x: R(-20, W + 20), y: any ? R(-20, H) : R(-40, -10), s: R(5, 10), vy: R(20, 42), a: R(16, 36), f: R(.5, 1.3), flip: R(1, 2.6), ph: R(0, TAU), rot: R(0, TAU), vr: R(-1.5, 1.5), c: pick(['#ffc4d6', '#ffb0c8', '#f7a1c0', '#ffd9e4', '#f58fb2']) }; }

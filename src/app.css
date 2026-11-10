@@ -7,6 +7,7 @@
   --surface: #151311;
   --surface-2: #1e1b18;
   --surface-3: #2a2622;
+  --card: color-mix(in srgb, var(--surface) 80%, transparent);
   --line: rgba(255, 236, 214, .08);
   --line-2: rgba(255, 236, 214, .15);
   --text: #f4efe7;
@@ -46,6 +47,8 @@ svg { flex: none; }
   background: radial-gradient(120% 55% at 50% -12%, var(--bg-glow), var(--bg) 62%);
 }
 @media (min-width: 520px) { #app { border-inline: 1px solid var(--line); } }
+
+#fx { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
 #view {
   position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden;
@@ -122,7 +125,7 @@ svg { flex: none; }
   position: relative; isolation: isolate; width: 100%; min-height: 292px;
   padding: 62px 28px 50px; text-align: center; overflow: hidden; contain: layout paint;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  background: var(--surface); border: 1px solid var(--line);
+  background: var(--card, var(--surface)); border: 1px solid var(--line);
   border-radius: 38% 42% 36% 40% / 34% 36% 40% 38%;
   box-shadow: 0 24px 40px -28px rgba(0, 0, 0, .9), inset 0 1px 0 rgba(255, 255, 255, .04);
   transition: color .45s .15s, border-color .45s;
@@ -214,7 +217,7 @@ svg { flex: none; }
 .then::before, .then::after { content: ""; width: 1px; height: 14px; background: var(--line-2); }
 
 .section {
-  width: min(100%, 380px); background: var(--surface); border: 1px solid var(--line); border-radius: 24px;
+  width: min(100%, 380px); background: var(--card, var(--surface)); border: 1px solid var(--line); border-radius: 24px;
   padding: 16px 16px 6px; animation: rise .45s var(--ease) both; animation-delay: calc(min(var(--i, 0), 4) * 40ms);
 }
 .list.still .section { animation: none; }
@@ -532,6 +535,18 @@ svg { flex: none; }
 #befs .tchip { height: 38px; padding: 0 14px; font-size: 14px; transition: background .25s, color .25s; }
 #befs .tchip.on { background: var(--ivory); color: var(--ink); border-color: transparent; }
 .times[hidden] { display: none; }
+.themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.theme {
+  position: relative; height: 96px; padding: 10px 11px; border-radius: 20px; border: 1px solid rgba(255, 255, 255, .1); overflow: hidden;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; text-align: left; gap: 1px;
+  background: radial-gradient(130% 95% at 50% 0%, var(--tg), var(--tb) 72%); outline: 2px solid transparent; outline-offset: 2px;
+  transition: outline-color .25s, transform .3s var(--spring);
+}
+.theme:active { transform: scale(.96); }
+.theme.on { outline-color: var(--ivory); }
+.theme i { position: absolute; top: 10px; right: 10px; width: 22px; height: 22px; border-radius: 50%; background: linear-gradient(155deg, var(--t1), var(--t2)); box-shadow: 0 0 18px -2px var(--t2); }
+.theme b { font: 600 13.5px var(--sans); color: #f4efe7; }
+.theme small { font: 500 10.5px/1.25 var(--sans); color: rgba(244, 239, 231, .62); }
 .colors { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px 10px; justify-items: center; }
 .cdot { width: 38px; height: 38px; padding: 0; cursor: pointer; border-radius: 50%; border: 0; background: linear-gradient(155deg, var(--c1), var(--c2)); outline: 2px solid transparent; outline-offset: 3px; transition: outline-color .25s, transform .3s var(--spring); }
 .cdot.on { outline-color: var(--ivory); transform: scale(1.06); }
@@ -568,7 +583,7 @@ svg { flex: none; }
 .duo-input { text-align: center; font: 600 30px var(--sans); letter-spacing: .12em; text-transform: uppercase; height: 64px; }
 .duo-sum { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 18px var(--gr) 0 var(--gl); }
 .duo-tile {
-  min-width: 0; padding: 16px 16px 14px; border-radius: 26px; background: var(--surface); border: 1px solid var(--line);
+  min-width: 0; padding: 16px 16px 14px; border-radius: 26px; background: var(--card, var(--surface)); border: 1px solid var(--line);
   animation: rise .45s var(--ease) both; animation-delay: calc(var(--i, 0) * 45ms);
 }
 .duo-sum.still .duo-tile { animation: none; }

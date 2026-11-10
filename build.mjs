@@ -41,7 +41,7 @@ ${body}
 `;
 
 const files = { 'index.html': html };
-for (const f of ['app.css', 'app.js', 'manifest.webmanifest']) files[f] = readFileSync(join(src, f));
+for (const f of ['app.css', 'fx.js', 'app.js', 'manifest.webmanifest']) files[f] = readFileSync(join(src, f));
 for (const f of readdirSync(join(src, 'icons'))) files['icons/' + f] = readFileSync(join(src, 'icons', f));
 
 const hash = createHash('sha256');

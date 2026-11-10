@@ -1545,6 +1545,7 @@ function profileSheet() {
     title: 'You', tall: true,
     body: `<input class="field" id="pname" placeholder="Your name" value="${esc(D.name)}" aria-label="Your name" style="font:300 24px var(--serif)">
       <div class="stats" style="margin-top:12px"><div class="stat"><b>${live().length}</b><small>Active habits</small></div><div class="stat"><b>${total}</b><small>Votes cast</small></div><div class="stat"><b>${all.filter(h => h.fame).length}</b><small>Hall of Fame</small></div></div>
+      ${themesHTML()}
       <p class="sec-label">Reminders</p>
       <div id="remsec">${remindersHTML()}</div>
       <p class="sec-label">Backup</p>
@@ -1575,6 +1576,11 @@ function profileSheet() {
       pushOn: async (a, e, L) => { a.disabled = true; await enablePush(); const s = L.el.querySelector('#remsec'); if (s) s.innerHTML = remindersHTML(); },
       pushOff: async (a, e, L) => { a.disabled = true; await disablePush(); const s = L.el.querySelector('#remsec'); if (s) s.innerHTML = remindersHTML(); },
       pushTest: async a => { a.disabled = true; await testPush(); a.disabled = false; },
+      theme: (a, e, L) => {
+        FX.setTheme(a.dataset.v); haptic(6);
+        L.el.querySelectorAll('.theme').forEach(b => { const on = b === a; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
+      },
+      motion: a => { FX.setMotion(!FX.motion()); a.classList.toggle('on', FX.motion()); a.setAttribute('aria-checked', FX.motion()); haptic(4); },
       download: () => {
         try {
           const blob = new Blob([JSON.stringify(D, null, 1)], { type: 'application/json' });
@@ -1598,6 +1604,15 @@ function profileSheet() {
       },
     },
   });
+}
+function themesHTML() {
+  if (!window.FX) return '';
+  const cur = FX.theme(), m = FX.motion();
+  return `<p class="sec-label">Theme</p>
+    <div class="themes" role="radiogroup" aria-label="Theme">${FX.THEMES.map(t => `<button class="theme ${cur === t.id ? 'on' : ''}" data-a="theme" data-v="${t.id}" role="radio" aria-checked="${cur === t.id}"
+      style="--tb:${t.bg};--tg:${t.glow};--t1:${t.sw[0]};--t2:${t.sw[1]}"><i></i><b>${t.name}</b><small>${t.note}</small></button>`).join('')}</div>
+    <div class="row-sb" style="margin-top:14px"><div><b style="font-weight:600;font-size:14px">Moving background</b><p class="small-note" style="margin:2px 0 0">Off keeps the scene still and saves battery.</p></div>
+      <button class="switch ${m ? 'on' : ''}" data-a="motion" role="switch" aria-checked="${m}" aria-label="Moving background"></button></div>`;
 }
 function remindersHTML() {
   if (!pushSupported()) return `<p class="muted" style="margin:0">Reminders work in the installed app. Open Do Work from your home screen to turn them on.</p>`;
